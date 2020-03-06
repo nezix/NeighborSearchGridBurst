@@ -45,8 +45,21 @@ public class NeighborSearchExample : MonoBehaviour {
 
 		initRendering();
 
+		NeighborSearchGridBurst nsgb = new NeighborSearchGridBurst();
 
-		NativeArray<int> result = NeighborSearchGridBurst.getPointsInRadius(allPoints, queryPoints, maxRes, cutoff);
+		NativeArray<int> result = nsgb.getPointsInRadius(allPoints, queryPoints, maxRes, cutoff);
+
+		
+		
+		int count = 0;
+		for (int i = 0; i < result.Length; i++) {
+			if (result[i] == -1) {
+				break;
+			}
+			Debug.Log(i + " : " + result[i]);
+			count++;
+		}
+		Debug.Log("Count = " + count);
 
 		result.Dispose();
 

@@ -11,24 +11,7 @@ using System.Linq;
 namespace Nezix {
 public class NeighborSearchGridBurst {
 
-
-	public static NativeArray<int> getPointsInRadius(NativeArray<float3> allPoints, NativeArray<float3> qPoints, int maxRes, float cutoff){
-		NativeArray<int> result = new NativeArray<int>(maxRes, Allocator.Persistent);
-
-		return result;
-	}
-
-	///Can contain duplicates
-	public void getAtomsWithin(NativeArray<float3> allPoints, NativeArray<float3> qPoints, NativeQueue<int> results, float cutoff) {
-
-		initGridNeighbor(allPoints);
-
-		searchInRadiusMerge(qPoints, results, cutoff);
-
-		clear();
-	}
-
-
+	const int MAXCELLS = 5000000;//~170^3
 	public bool isInit = false;
 	private NativeArray<float3> sortedPos;
 	private NativeArray<int2> cellStartEnd;
@@ -39,20 +22,37 @@ public class NeighborSearchGridBurst {
 	public int3 gridDim;
 
 
+	///Can contain duplicates
+	public NativeArray<int> getPointsInRadius(NativeArray<float3> allPoints, NativeArray<float3> qPoints, int maxRes, float cutoff) {
+		NativeArray<int> results = new NativeArray<int>(maxRes * qPoints.Length, Allocator.Persistent);
 
-	void initGridNeighbor(NativeArray<float3> atomPos) {
+		initGrid(allPoints);
 
-		if (atomPos.Length < 3) {
+		radiusSearch(qPoints, results, maxRes, cutoff);
+
+		clear();
+		return results;
+	}
+
+
+
+	void initGrid(NativeArray<float3> positions, float gridReso = 0.5f) {
+
+		if (positions.Length < 3) {
 			Debug.LogError("Too few points to search");
 			return;
 		}
+
 		float3 minValue = float3.zero;
 		float3 maxValue = float3.zero;
 
-		getMinMaxCoords(atomPos, ref minValue, ref maxValue);
+		getMinMaxCoords(positions, ref minValue, ref maxValue);
 
 		float3 originGrid = minValue;
-		float gridResolutionNeighbor = (3 * 2) * 2 ;//Approx 2 atoms per cell
+		float gridResolutionNeighbor = gridReso ;
+		//TODO Find a "good" resolution, for example:
+		//Sample X close points and find the mean distance
+
 		float maxDist = math.max(maxValue.x - minValue.x, math.max(maxValue.y - minValue.y, maxValue.z - minValue.z));
 
 		oriGrid = originGrid;
@@ -62,44 +62,56 @@ public class NeighborSearchGridBurst {
 			Debug.LogError("Failed to init grid for neighbor search");
 			return;
 		}
+
 		int gridNeighborSize = (int)math.ceil(maxDist / gridResolutionNeighbor);
 		int3 gridNeighborDim = new int3(gridNeighborSize, gridNeighborSize, gridNeighborSize);
 		int nbcellsNeighbor = gridNeighborDim.x * gridNeighborDim.y * gridNeighborDim.z;
 
+		Debug.Log(gridNeighborDim.x + " x " + gridNeighborDim.y + " x " + gridNeighborDim.z + " = " + nbcellsNeighbor);
+		if (nbcellsNeighbor > MAXCELLS) {
+			Debug.LogError(gridNeighborDim.x + " x " + gridNeighborDim.y + " x " + gridNeighborDim.z +
+			               " = " + nbcellsNeighbor + " => Grid is too large, try changing the grid resolution");
+			return;
+		}
+
 		gridDim = gridNeighborDim;
 
-		hashIndex = new NativeArray<int2>(atomPos.Length, Allocator.TempJob);
-		sortedPos = new NativeArray<float3>(atomPos.Length, Allocator.Persistent);
+		hashIndex = new NativeArray<int2>(positions.Length, Allocator.TempJob);
+		sortedPos = new NativeArray<float3>(positions.Length, Allocator.Persistent);
 		cellStartEnd = new NativeArray<int2>(nbcellsNeighbor, Allocator.Persistent);
+
+		//Assign a cell id to each point
 
 		var assignHashJob = new AssignHashJob() {
 			oriGrid = originGrid,
 			resoGrid = gridResolutionNeighbor,
 			gridDim = gridNeighborDim,
-			pos = atomPos,
+			pos = positions,
 			hashIndex = hashIndex
 		};
-		var assignHashJobHandle = assignHashJob.Schedule(atomPos.Length, 128);
+		var assignHashJobHandle = assignHashJob.Schedule(positions.Length, 128);
 		assignHashJobHandle.Complete();
 
+		//Sort the points based on the cell id
 		hashIndex.Sort(new int2Comparer());//Compare int2 !
 
+
+		//Fill the grid with empty cells
 		var memsetCellStartJob = new MemsetCellStartJob() {
 			cellStartEnd = cellStartEnd
 		};
 		var memsetCellStartJobHandle = memsetCellStartJob.Schedule(nbcellsNeighbor, 256);
 		memsetCellStartJobHandle.Complete();
 
-
-
+		//Fill non-empty cells with point indices and reorder the point array
 		var sortCellJob = new SortCellJob() {
-			pos = atomPos,
+			pos = positions,
 			hashIndex = hashIndex,
 			cellStartEnd = cellStartEnd,
 			sortedPos = sortedPos
 		};
 
-		var sortCellJobHandle = sortCellJob.Schedule(atomPos.Length, 128);
+		var sortCellJobHandle = sortCellJob.Schedule(positions.Length, 128);
 		sortCellJobHandle.Complete();
 
 		isInit = true;
@@ -109,58 +121,21 @@ public class NeighborSearchGridBurst {
 		sortedPos.Dispose();
 		cellStartEnd.Dispose();
 		hashIndex.Dispose();
-
 	}
-	public int[] searchClosestPoint(Vector3[] queryPoints) {
-
-		NativeArray<float3> qPoints = new NativeArray<float3>(queryPoints.Length, Allocator.TempJob);
-		NativeArray<int> results = new NativeArray<int>(queryPoints.Length, Allocator.TempJob);
-		GetNativeArray(qPoints, queryPoints);
 
 
+	public void radiusSearch(NativeArray<float3> qPoints, NativeArray<int> results, int maxRes, float cutoff) {
+		float start = Time.realtimeSinceStartup;
 
-
-		var closestPointJob = new ClosestPointJob() {
+		var radiusJob = new RadiusSearchJob() {
 			oriGrid = oriGrid,
 			resoGrid = resoGrid,
 			gridDim = gridDim,
 			queryPos = qPoints,
 			sortedPos = sortedPos,
 			cellStartEnd = cellStartEnd,
-			results = results
-		};
-
-		var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
-		closestPointJobHandle.Complete();
-
-		int[] res = new int[qPoints.Length];
-		SetNativeArrayInt(res, results);
-
-		qPoints.Dispose();
-		results.Dispose();
-
-		return res;
-	}
-
-	public List<int> searchInRadius(NativeArray<float3> atomPos, NativeArray<float3> qPoints, float rad) {
-		float start = Time.realtimeSinceStartup;		
-		initGridNeighbor(atomPos);
-		Debug.Log("Time for init: " + (1000.0f * (Time.realtimeSinceStartup - start)).ToString("f3") + " ms");
-
-		start = Time.realtimeSinceStartup;
-
-		int maxRes = (int)((Mathf.PI * 4 * rad * rad) * 0.35f);//Assuming 0.35 atom per Angstrom^3
-		NativeArray<int> results = new NativeArray<int>(qPoints.Length * maxRes, Allocator.TempJob);
-
-		var radiusJob = new InRadiusArrayJob() {
-			oriGrid = oriGrid,
-			resoGrid = resoGrid,
-			gridDim = gridDim,
-			queryPos = qPoints,
-			sortedPos = sortedPos,
-			cellStartEnd = cellStartEnd,
-			radius = rad,
-			radrad = rad * rad,
+			radius = cutoff,
+			radrad = cutoff * cutoff,
 			maxRes = maxRes,
 			results = results,
 			hashIndex = hashIndex
@@ -168,122 +143,20 @@ public class NeighborSearchGridBurst {
 		var radiusJobHandle = radiusJob.Schedule(qPoints.Length, 64);
 		radiusJobHandle.Complete();
 
+		results.Sort(new NeighborSearchGridBurst.intInvComparer());
+
+
 		Debug.Log("Time for grid search: " + (1000.0f * (Time.realtimeSinceStartup - start)).ToString("f3") + " ms");
-
-
-		List<int> tmpHash = new List<int>(atomPos.Length);
-
-		int tmpcout = 0;
-		for (int i = 0; i < results.Length; i++) {
-			if (results[i] >= 0) {
-				tmpHash.Add(results[i]);
-			}
-		}
-		clear();
-		results.Dispose();
-
-		return tmpHash;
-
-	}
-
-	public HashSet<int> searchInRadiusstream(NativeArray<float3> atomPos, NativeArray<float3> qPoints, float rad) {
-		initGridNeighbor(atomPos);
-
-		int maxRes = (int)((Mathf.PI * 4 * rad * rad) * 0.35f);//Assuming 0.35 atom per Angstrom^3
-		// NativeArray<float3> qPoints = new NativeArray<float3>(queryPoints.Length, Allocator.TempJob);
-		// NativeMultiHashMap<int, int> results = new NativeMultiHashMap<int, int>(queryPoints.Length * maxRes, Allocator.TempJob);
-		NativeStream results = new NativeStream(qPoints.Length, Allocator.TempJob);
-
-		// GetNativeArray(qPoints, queryPoints);
-
-
-		var radiusJob = new InRadiusStreamJob() {
-			oriGrid = oriGrid,
-			resoGrid = resoGrid,
-			gridDim = gridDim,
-			queryPos = qPoints,
-			sortedPos = sortedPos,
-			cellStartEnd = cellStartEnd,
-			radius = rad,
-			radrad = rad * rad,
-			// results = results.ToConcurrent(),
-			results = results.AsWriter(),
-			hashIndex = hashIndex
-		};
-
-		var radiusJobHandle = radiusJob.Schedule(qPoints.Length, 16);
-		JobHandle.ScheduleBatchedJobs();
-		radiusJobHandle.Complete();
-
-		HashSet<int> tmpHash = new HashSet<int>();
-
-		var reader = results.AsReader();
-		// List<int>[] output = new List<int>[queryPoints.Length];
-		for (int i = 0; i < qPoints.Length; i++) {
-
-			int count = reader.BeginForEachIndex(i);
-
-			for (int j = 0; j < count; j++) {
-				int item = reader.Read<int>();
-				tmpHash.Add(item);
-			}
-			reader.EndForEachIndex();
-			// if (results.TryGetFirstValue(i, out int item, out NativeMultiHashMapIterator<int> it)) {
-			// 	do {
-			// 		tmpHash.Add(item);
-			// 	} while (results.TryGetNextValue(out item, ref it));
-			// }
-
-			// output[i] = tmpHash.ToList();
-		}
-
-
-		// qPoints.Dispose();
-		results.Dispose();
-		clear();
-
-		return tmpHash;
-
 	}
 
 
-	public void searchInRadiusMerge(NativeArray<float3> qPoints, NativeQueue<int> results, float rad) {
-		int maxRes = (int)((Mathf.PI * 4 * rad * rad) * 0.35f);//Assuming 0.35 atom per Angstrom^3
-
-		int3 cell = (int3)((qPoints[0] - oriGrid) / resoGrid);
-
-		int neighcellhash = (gridDim.y * gridDim.z * cell.x) + (gridDim.z * cell.y) + cell.z;
-
-		int idStart = cellStartEnd[neighcellhash].x;
-		int idStop = cellStartEnd[neighcellhash].y;
-
-
-		var radiusJob = new InRadiusMergeJob() {
-			oriGrid = oriGrid,
-			resoGrid = resoGrid,
-			gridDim = gridDim,
-			queryPos = qPoints,
-			sortedPos = sortedPos,
-			cellStartEnd = cellStartEnd,
-			radius = rad,
-			radrad = rad * rad,
-			results = results,
-			hashIndex = hashIndex
-		};
-
-		var radiusJobHandle = radiusJob.Schedule(qPoints.Length, 16);
-		JobHandle.ScheduleBatchedJobs();
-		radiusJobHandle.Complete();
-
-	}
-
-	void getMinMaxCoords(NativeArray<float3> atomPos, ref float3 minV, ref float3 maxV) {
+	void getMinMaxCoords(NativeArray<float3> positions, ref float3 minV, ref float3 maxV) {
 		NativeArray<float3> tmpmin = new NativeArray<float3>(1, Allocator.TempJob);
 		NativeArray<float3> tmpmax = new NativeArray<float3>(1, Allocator.TempJob);
 		var mmJob = new getminmaxJob() {
 			minVal = tmpmin,
 			maxVal = tmpmax,
-			pos = atomPos
+			pos = positions
 		};
 		var mmJobHandle = mmJob.Schedule();
 		mmJobHandle.Complete();
@@ -410,170 +283,9 @@ public class NeighborSearchGridBurst {
 		}
 	}
 
-	[BurstCompile]
-	struct ClosestPointJob : IJobParallelFor {
-		[ReadOnly] public float3 oriGrid;
-		[ReadOnly] public float resoGrid;
-		[ReadOnly] public int3 gridDim;
-		[ReadOnly] public NativeArray<float3> queryPos;
-		[ReadOnly] public NativeArray<int2> cellStartEnd;
-		[ReadOnly] public NativeArray<float3> sortedPos;
-		public NativeArray<int> results;
-
-		void IJobParallelFor.Execute(int index) {
-			results[index] = -1;
-			float3 p = queryPos[index];
-
-			int3 cell = spaceToGrid(p, oriGrid, resoGrid);
-
-			float minD = 9999.0f;
-			int3 curGridId;
-			int minRes = -1;
-
-			for (int x = -1; x <= 1; x++) {
-				curGridId.x = cell.x + x;
-				if (curGridId.x >= 0 && curGridId.x < gridDim.x) {
-					for (int y = -1; y <= 1; y++) {
-						curGridId.y = cell.y + y;
-						if (curGridId.y >= 0 && curGridId.y < gridDim.y) {
-							for (int z = -1; z <= 1; z++) {
-								curGridId.z = cell.z + z;
-								if (curGridId.z >= 0 && curGridId.z < gridDim.z) {
-
-									int neighcellhash = flatten3DTo1D(curGridId, gridDim);
-									int idStart = cellStartEnd[neighcellhash].x;
-									int idStop = cellStartEnd[neighcellhash].y;
-
-									if (idStart < int.MaxValue - 1) {
-										for (int id = idStart; id < idStop; id++) {
-
-											float3 posA = sortedPos[id];
-											float d = sqr_distance(posA, p);
-											if (d < minD) {
-												minRes = id;
-												minD = d;
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			if (minRes != -1) {
-				results[index] = minRes;
-			}
-			else {
-				//Compute all the distances ! = SLOW
-				for (int id = 0; id < sortedPos.Length; id++) {
-
-					float3 posA = sortedPos[id];
-					float d = sqr_distance(p, posA);
-					if (d < minD) {
-						minRes = id;
-						minD = d;
-					}
-				}
-				results[index] = minRes;
-			}
-		}
-		int3 spaceToGrid(float3 pos3D, float3 originGrid, float dx) {
-			return (int3)((pos3D - originGrid) / dx);
-		}
-		int flatten3DTo1D(int3 id3d, int3 gridDim) {
-			return (gridDim.y * gridDim.z * id3d.x) + (gridDim.z * id3d.y) + id3d.z;
-		}
-
-		float sqr_distance(float3 p1, float3 p2) {
-			float x = (p1.x - p2.x) * (p1.x - p2.x);
-			float y = (p1.y - p2.y) * (p1.y - p2.y);
-			float z = (p1.z - p2.z) * (p1.z - p2.z);
-
-			return x + y + z;
-		}
-	}
 
 	[BurstCompile]
-	struct InRadiusStreamJob : IJobParallelFor {
-		[ReadOnly] public float3 oriGrid;
-		[ReadOnly] public float resoGrid;
-		[ReadOnly] public int3 gridDim;
-		[ReadOnly] public NativeArray<float3> queryPos;
-		[ReadOnly] public NativeArray<int2> cellStartEnd;
-		[ReadOnly] public NativeArray<float3> sortedPos;
-		[ReadOnly] public float radius;
-		[ReadOnly] public float radrad;
-		[ReadOnly] public NativeArray<int2> hashIndex;
-
-
-		// public NativeMultiHashMap<int, int>.Concurrent results;
-		public NativeStream.Writer results;
-
-		void IJobParallelFor.Execute(int index) {
-
-			results.BeginForEachIndex(index);
-
-			float3 p = queryPos[index];
-			int3 cell = spaceToGrid(p, oriGrid, resoGrid);
-
-			int3 curGridId;
-			int range = math.max(1, (int)(radius / resoGrid));
-
-			for (int x = -range; x <= range; x++) {
-				curGridId.x = cell.x + x;
-				if (curGridId.x >= 0 && curGridId.x < gridDim.x) {
-					for (int y = -range; y <= range; y++) {
-						curGridId.y = cell.y + y;
-						if (curGridId.y >= 0 && curGridId.y < gridDim.y) {
-							for (int z = -range; z <= range; z++) {
-								curGridId.z = cell.z + z;
-								if (curGridId.z >= 0 && curGridId.z < gridDim.z) {
-
-									int neighcellhash = flatten3DTo1D(curGridId, gridDim);
-									int idStart = cellStartEnd[neighcellhash].x;
-									int idStop = cellStartEnd[neighcellhash].y;
-
-									if (idStart < int.MaxValue - 1) {//Not empty cell
-										for (int id = idStart; id < idStop; id++) {
-
-											if (id > 0 && id < sortedPos.Length) {
-												float3 posA = sortedPos[id];
-												float d = sqr_distance(posA, p);
-												// Debug.Log(curGridId + " / "+id+" / "+math.sqrt(d));
-												if (d <= radrad) {
-													results.Write(hashIndex[id].y);
-													// results.Add(index, hashIndex[id].y);
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			results.EndForEachIndex();
-
-		}
-		int3 spaceToGrid(float3 pos3D, float3 originGrid, float dx) {
-			return (int3)((pos3D - originGrid) / dx);
-		}
-		int flatten3DTo1D(int3 id3d, int3 gridDim) {
-			return (gridDim.y * gridDim.z * id3d.x) + (gridDim.z * id3d.y) + id3d.z;
-		}
-		float sqr_distance(float3 p1, float3 p2) {
-			float x = (p1.x - p2.x) * (p1.x - p2.x);
-			float y = (p1.y - p2.y) * (p1.y - p2.y);
-			float z = (p1.z - p2.z) * (p1.z - p2.z);
-
-			return x + y + z;
-		}
-	}
-
-	[BurstCompile]
-	struct InRadiusArrayJob : IJobParallelFor {
+	struct RadiusSearchJob : IJobParallelFor {
 		[ReadOnly] public float3 oriGrid;
 		[ReadOnly] public float resoGrid;
 		[ReadOnly] public int3 gridDim;
@@ -590,85 +302,11 @@ public class NeighborSearchGridBurst {
 
 		void IJobParallelFor.Execute(int index) {
 
-			int offset = index * maxRes;
 			for (int i = 0; i < maxRes; i++) {
-				results[offset + i] = -1;
+				results[index * maxRes + i] = -1;
 			}
 
-			float3 p = queryPos[index];
-			int3 cell = spaceToGrid(p, oriGrid, resoGrid);
-
-			int3 curGridId;
-			int range = math.max(1, (int)(radius / resoGrid));
-
-			int nbRes = 0;
-			for (int x = -range; x <= range; x++) {
-				curGridId.x = cell.x + x;
-				if (curGridId.x >= 0 && curGridId.x < gridDim.x) {
-					for (int y = -range; y <= range; y++) {
-						curGridId.y = cell.y + y;
-						if (curGridId.y >= 0 && curGridId.y < gridDim.y) {
-							for (int z = -range; z <= range; z++) {
-								curGridId.z = cell.z + z;
-								if (curGridId.z >= 0 && curGridId.z < gridDim.z) {
-
-									int neighcellhash = flatten3DTo1D(curGridId, gridDim);
-									int idStart = cellStartEnd[neighcellhash].x;
-									int idStop = cellStartEnd[neighcellhash].y;
-
-									if (idStart < int.MaxValue - 1) {//Not empty cell
-										for (int id = idStart; id < idStop; id++) {
-
-											if (id > 0 && id < sortedPos.Length) {
-												float3 posA = sortedPos[id];
-												float d = sqr_distance(posA, p);
-												// Debug.Log(curGridId + " / "+id+" / "+math.sqrt(d));
-												if (d <= radrad) {
-													results[offset + nbRes] = hashIndex[id].y;
-													nbRes++;
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		int3 spaceToGrid(float3 pos3D, float3 originGrid, float dx) {
-			return (int3)((pos3D - originGrid) / dx);
-		}
-		int flatten3DTo1D(int3 id3d, int3 gridDim) {
-			return (gridDim.y * gridDim.z * id3d.x) + (gridDim.z * id3d.y) + id3d.z;
-		}
-		float sqr_distance(float3 p1, float3 p2) {
-			float x = (p1.x - p2.x) * (p1.x - p2.x);
-			float y = (p1.y - p2.y) * (p1.y - p2.y);
-			float z = (p1.z - p2.z) * (p1.z - p2.z);
-
-			return x + y + z;
-		}
-	}
-
-	[BurstCompile]
-	struct InRadiusMergeJob : IJobParallelFor {
-		[ReadOnly] public float3 oriGrid;
-		[ReadOnly] public float resoGrid;
-		[ReadOnly] public int3 gridDim;
-		[ReadOnly] public NativeArray<float3> queryPos;
-		[ReadOnly] public NativeArray<int2> cellStartEnd;
-		[ReadOnly] public NativeArray<float3> sortedPos;
-		[ReadOnly] public float radius;
-		[ReadOnly] public float radrad;
-		[ReadOnly] public NativeArray<int2> hashIndex;
-
-
-		public NativeQueue<int> results;
-
-		void IJobParallelFor.Execute(int index) {
-
+			int curId = 0;
 			float3 p = queryPos[index];
 			int3 cell = spaceToGrid(p, oriGrid, resoGrid);
 
@@ -696,7 +334,13 @@ public class NeighborSearchGridBurst {
 											float d = sqr_distance(posA, p);
 											// Debug.Log(curGridId + " / "+id+" / "+math.sqrt(d));
 											if (d <= radrad) {
-												results.Enqueue(hashIndex[id].y);
+												if(curId < maxRes){
+													results[index * maxRes + curId] = hashIndex[id].y;
+													curId++;
+												}
+												else{
+													return;
+												}
 											}
 										}
 									}
@@ -706,7 +350,6 @@ public class NeighborSearchGridBurst {
 					}
 				}
 			}
-
 		}
 		int3 spaceToGrid(float3 pos3D, float3 originGrid, float dx) {
 			return (int3)((pos3D - originGrid) / dx);
@@ -726,9 +369,331 @@ public class NeighborSearchGridBurst {
 
 
 
+	// [BurstCompile]
+	// struct ClosestPointJob : IJobParallelFor {
+	// 	[ReadOnly] public float3 oriGrid;
+	// 	[ReadOnly] public float resoGrid;
+	// 	[ReadOnly] public int3 gridDim;
+	// 	[ReadOnly] public NativeArray<float3> queryPos;
+	// 	[ReadOnly] public NativeArray<int2> cellStartEnd;
+	// 	[ReadOnly] public NativeArray<float3> sortedPos;
+	// 	public NativeArray<int> results;
+
+	// 	void IJobParallelFor.Execute(int index) {
+	// 		results[index] = -1;
+	// 		float3 p = queryPos[index];
+
+	// 		int3 cell = spaceToGrid(p, oriGrid, resoGrid);
+
+	// 		float minD = 9999.0f;
+	// 		int3 curGridId;
+	// 		int minRes = -1;
+
+	// 		for (int x = -1; x <= 1; x++) {
+	// 			curGridId.x = cell.x + x;
+	// 			if (curGridId.x >= 0 && curGridId.x < gridDim.x) {
+	// 				for (int y = -1; y <= 1; y++) {
+	// 					curGridId.y = cell.y + y;
+	// 					if (curGridId.y >= 0 && curGridId.y < gridDim.y) {
+	// 						for (int z = -1; z <= 1; z++) {
+	// 							curGridId.z = cell.z + z;
+	// 							if (curGridId.z >= 0 && curGridId.z < gridDim.z) {
+
+	// 								int neighcellhash = flatten3DTo1D(curGridId, gridDim);
+	// 								int idStart = cellStartEnd[neighcellhash].x;
+	// 								int idStop = cellStartEnd[neighcellhash].y;
+
+	// 								if (idStart < int.MaxValue - 1) {
+	// 									for (int id = idStart; id < idStop; id++) {
+
+	// 										float3 posA = sortedPos[id];
+	// 										float d = sqr_distance(posA, p);
+	// 										if (d < minD) {
+	// 											minRes = id;
+	// 											minD = d;
+	// 										}
+	// 									}
+	// 								}
+	// 							}
+	// 						}
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 		if (minRes != -1) {
+	// 			results[index] = minRes;
+	// 		}
+	// 		else {
+	// 			//Compute all the distances ! = SLOW
+	// 			for (int id = 0; id < sortedPos.Length; id++) {
+
+	// 				float3 posA = sortedPos[id];
+	// 				float d = sqr_distance(p, posA);
+	// 				if (d < minD) {
+	// 					minRes = id;
+	// 					minD = d;
+	// 				}
+	// 			}
+	// 			results[index] = minRes;
+	// 		}
+	// 	}
+	// 	int3 spaceToGrid(float3 pos3D, float3 originGrid, float dx) {
+	// 		return (int3)((pos3D - originGrid) / dx);
+	// 	}
+	// 	int flatten3DTo1D(int3 id3d, int3 gridDim) {
+	// 		return (gridDim.y * gridDim.z * id3d.x) + (gridDim.z * id3d.y) + id3d.z;
+	// 	}
+
+	// 	float sqr_distance(float3 p1, float3 p2) {
+	// 		float x = (p1.x - p2.x) * (p1.x - p2.x);
+	// 		float y = (p1.y - p2.y) * (p1.y - p2.y);
+	// 		float z = (p1.z - p2.z) * (p1.z - p2.z);
+
+	// 		return x + y + z;
+	// 	}
+	// }
+
+	// [BurstCompile]
+	// struct InRadiusStreamJob : IJobParallelFor {
+	// 	[ReadOnly] public float3 oriGrid;
+	// 	[ReadOnly] public float resoGrid;
+	// 	[ReadOnly] public int3 gridDim;
+	// 	[ReadOnly] public NativeArray<float3> queryPos;
+	// 	[ReadOnly] public NativeArray<int2> cellStartEnd;
+	// 	[ReadOnly] public NativeArray<float3> sortedPos;
+	// 	[ReadOnly] public float radius;
+	// 	[ReadOnly] public float radrad;
+	// 	[ReadOnly] public NativeArray<int2> hashIndex;
+
+
+	// 	// public NativeMultiHashMap<int, int>.Concurrent results;
+	// 	public NativeStream.Writer results;
+
+	// 	void IJobParallelFor.Execute(int index) {
+
+	// 		results.BeginForEachIndex(index);
+
+	// 		float3 p = queryPos[index];
+	// 		int3 cell = spaceToGrid(p, oriGrid, resoGrid);
+
+	// 		int3 curGridId;
+	// 		int range = math.max(1, (int)(radius / resoGrid));
+
+	// 		for (int x = -range; x <= range; x++) {
+	// 			curGridId.x = cell.x + x;
+	// 			if (curGridId.x >= 0 && curGridId.x < gridDim.x) {
+	// 				for (int y = -range; y <= range; y++) {
+	// 					curGridId.y = cell.y + y;
+	// 					if (curGridId.y >= 0 && curGridId.y < gridDim.y) {
+	// 						for (int z = -range; z <= range; z++) {
+	// 							curGridId.z = cell.z + z;
+	// 							if (curGridId.z >= 0 && curGridId.z < gridDim.z) {
+
+	// 								int neighcellhash = flatten3DTo1D(curGridId, gridDim);
+	// 								int idStart = cellStartEnd[neighcellhash].x;
+	// 								int idStop = cellStartEnd[neighcellhash].y;
+
+	// 								if (idStart < int.MaxValue - 1) {//Not empty cell
+	// 									for (int id = idStart; id < idStop; id++) {
+
+	// 										if (id > 0 && id < sortedPos.Length) {
+	// 											float3 posA = sortedPos[id];
+	// 											float d = sqr_distance(posA, p);
+	// 											// Debug.Log(curGridId + " / "+id+" / "+math.sqrt(d));
+	// 											if (d <= radrad) {
+	// 												results.Write(hashIndex[id].y);
+	// 												// results.Add(index, hashIndex[id].y);
+	// 											}
+	// 										}
+	// 									}
+	// 								}
+	// 							}
+	// 						}
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 		results.EndForEachIndex();
+
+	// 	}
+	// 	int3 spaceToGrid(float3 pos3D, float3 originGrid, float dx) {
+	// 		return (int3)((pos3D - originGrid) / dx);
+	// 	}
+	// 	int flatten3DTo1D(int3 id3d, int3 gridDim) {
+	// 		return (gridDim.y * gridDim.z * id3d.x) + (gridDim.z * id3d.y) + id3d.z;
+	// 	}
+	// 	float sqr_distance(float3 p1, float3 p2) {
+	// 		float x = (p1.x - p2.x) * (p1.x - p2.x);
+	// 		float y = (p1.y - p2.y) * (p1.y - p2.y);
+	// 		float z = (p1.z - p2.z) * (p1.z - p2.z);
+
+	// 		return x + y + z;
+	// 	}
+	// }
+
+	// [BurstCompile]
+	// struct InRadiusArrayJob : IJobParallelFor {
+	// 	[ReadOnly] public float3 oriGrid;
+	// 	[ReadOnly] public float resoGrid;
+	// 	[ReadOnly] public int3 gridDim;
+	// 	[ReadOnly] public NativeArray<float3> queryPos;
+	// 	[ReadOnly] public NativeArray<int2> cellStartEnd;
+	// 	[ReadOnly] public NativeArray<float3> sortedPos;
+	// 	[ReadOnly] public float radius;
+	// 	[ReadOnly] public float radrad;
+	// 	[ReadOnly] public NativeArray<int2> hashIndex;
+	// 	[ReadOnly] public int maxRes;
+
+	// 	[NativeDisableParallelForRestriction]
+	// 	public NativeArray<int> results;
+
+	// 	void IJobParallelFor.Execute(int index) {
+
+	// 		int offset = index * maxRes;
+	// 		for (int i = 0; i < maxRes; i++) {
+	// 			results[offset + i] = -1;
+	// 		}
+
+	// 		float3 p = queryPos[index];
+	// 		int3 cell = spaceToGrid(p, oriGrid, resoGrid);
+
+	// 		int3 curGridId;
+	// 		int range = math.max(1, (int)(radius / resoGrid));
+
+	// 		int nbRes = 0;
+	// 		for (int x = -range; x <= range; x++) {
+	// 			curGridId.x = cell.x + x;
+	// 			if (curGridId.x >= 0 && curGridId.x < gridDim.x) {
+	// 				for (int y = -range; y <= range; y++) {
+	// 					curGridId.y = cell.y + y;
+	// 					if (curGridId.y >= 0 && curGridId.y < gridDim.y) {
+	// 						for (int z = -range; z <= range; z++) {
+	// 							curGridId.z = cell.z + z;
+	// 							if (curGridId.z >= 0 && curGridId.z < gridDim.z) {
+
+	// 								int neighcellhash = flatten3DTo1D(curGridId, gridDim);
+	// 								int idStart = cellStartEnd[neighcellhash].x;
+	// 								int idStop = cellStartEnd[neighcellhash].y;
+
+	// 								if (idStart < int.MaxValue - 1) {//Not empty cell
+	// 									for (int id = idStart; id < idStop; id++) {
+
+	// 										if (id > 0 && id < sortedPos.Length) {
+	// 											float3 posA = sortedPos[id];
+	// 											float d = sqr_distance(posA, p);
+	// 											// Debug.Log(curGridId + " / "+id+" / "+math.sqrt(d));
+	// 											if (d <= radrad) {
+	// 												results[offset + nbRes] = hashIndex[id].y;
+	// 												nbRes++;
+	// 											}
+	// 										}
+	// 									}
+	// 								}
+	// 							}
+	// 						}
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// 	int3 spaceToGrid(float3 pos3D, float3 originGrid, float dx) {
+	// 		return (int3)((pos3D - originGrid) / dx);
+	// 	}
+	// 	int flatten3DTo1D(int3 id3d, int3 gridDim) {
+	// 		return (gridDim.y * gridDim.z * id3d.x) + (gridDim.z * id3d.y) + id3d.z;
+	// 	}
+	// 	float sqr_distance(float3 p1, float3 p2) {
+	// 		float x = (p1.x - p2.x) * (p1.x - p2.x);
+	// 		float y = (p1.y - p2.y) * (p1.y - p2.y);
+	// 		float z = (p1.z - p2.z) * (p1.z - p2.z);
+
+	// 		return x + y + z;
+	// 	}
+	// }
+
+	// [BurstCompile]
+	// struct InRadiusMergeJob : IJobParallelFor {
+	// 	[ReadOnly] public float3 oriGrid;
+	// 	[ReadOnly] public float resoGrid;
+	// 	[ReadOnly] public int3 gridDim;
+	// 	[ReadOnly] public NativeArray<float3> queryPos;
+	// 	[ReadOnly] public NativeArray<int2> cellStartEnd;
+	// 	[ReadOnly] public NativeArray<float3> sortedPos;
+	// 	[ReadOnly] public float radius;
+	// 	[ReadOnly] public float radrad;
+	// 	[ReadOnly] public NativeArray<int2> hashIndex;
+
+
+	// 	public NativeQueue<int> results;
+
+	// 	void IJobParallelFor.Execute(int index) {
+
+	// 		float3 p = queryPos[index];
+	// 		int3 cell = spaceToGrid(p, oriGrid, resoGrid);
+
+	// 		int3 curGridId;
+	// 		int range = math.max(1, (int)(radius / resoGrid));
+
+	// 		for (int x = -range; x <= range; x++) {
+	// 			curGridId.x = cell.x + x;
+	// 			if (curGridId.x >= 0 && curGridId.x < gridDim.x) {
+	// 				for (int y = -range; y <= range; y++) {
+	// 					curGridId.y = cell.y + y;
+	// 					if (curGridId.y >= 0 && curGridId.y < gridDim.y) {
+	// 						for (int z = -range; z <= range; z++) {
+	// 							curGridId.z = cell.z + z;
+	// 							if (curGridId.z >= 0 && curGridId.z < gridDim.z) {
+
+	// 								int neighcellhash = flatten3DTo1D(curGridId, gridDim);
+	// 								int idStart = cellStartEnd[neighcellhash].x;
+	// 								int idStop = cellStartEnd[neighcellhash].y;
+
+	// 								if (idStart < int.MaxValue - 1) {//Not empty cell
+	// 									for (int id = idStart; id < idStop; id++) {
+
+	// 										float3 posA = sortedPos[id];
+	// 										float d = sqr_distance(posA, p);
+	// 										// Debug.Log(curGridId + " / "+id+" / "+math.sqrt(d));
+	// 										if (d <= radrad) {
+	// 											results.Enqueue(hashIndex[id].y);
+	// 										}
+	// 									}
+	// 								}
+	// 							}
+	// 						}
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+
+	// 	}
+	// 	int3 spaceToGrid(float3 pos3D, float3 originGrid, float dx) {
+	// 		return (int3)((pos3D - originGrid) / dx);
+	// 	}
+	// 	int flatten3DTo1D(int3 id3d, int3 gridDim) {
+	// 		return (gridDim.y * gridDim.z * id3d.x) + (gridDim.z * id3d.y) + id3d.z;
+	// 	}
+	// 	float sqr_distance(float3 p1, float3 p2) {
+	// 		float x = (p1.x - p2.x) * (p1.x - p2.x);
+	// 		float y = (p1.y - p2.y) * (p1.y - p2.y);
+	// 		float z = (p1.z - p2.z) * (p1.z - p2.z);
+
+	// 		return x + y + z;
+	// 	}
+	// }
+
+
+
+
 	public struct int2Comparer : IComparer<int2> {
 		public int Compare(int2 lhs, int2 rhs) {
 			return lhs.x.CompareTo(rhs.x);
+		}
+	}
+
+	public struct intInvComparer : IComparer<int> {
+		public int Compare(int lhs, int rhs) {
+			return rhs.CompareTo(lhs);
 		}
 	}
 
