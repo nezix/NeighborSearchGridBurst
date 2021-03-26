@@ -50,6 +50,8 @@ Example cases:
     Debug.Log(positions[results[0]);
   
   
+  gsb.clean();//Free up the native arrays !
+  
 ```
 
 ## Benchmark: Grid vs KDtree (KNN implementation from: [https://github.com/ArthurBrussee/KNN](here)) (Intel i7 4790k)
