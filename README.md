@@ -1,8 +1,28 @@
 # Fast neighbor search using a grid in Unity, Job System + Burst 
+---------------
+
+## This is a fast, parallel (C# job system) and vectorized (Burst compiled) code for Unity for k-neighbor search.
+For some data, it can be faster than using a KDtree (can be 25 times faster than fast KDTree KNN from [https://github.com/ArthurBrussee/KNN](here)).
+
+#### Best case scenario: uniformly distributed points in space
+#### Worst case scenario: nearly all points close to each others and some points far from the cluster
+
+**For k-neighbor search, if maxNeighborPerQuery is not enough, the search does not return all points close to the query point. It can skip points that are closer to the one returned**
+
+Parameters to adjust:
+- Grid resolution, adjust this parameter according to your data, density per cell shouldn't be too large for performance, not too low for memory consumption
+- For k-neighbor search, you have to specify the maximum number of neighbors (maxNeighborPerQuery).
+
+Example cases:
+- Points ranging from -100 to 100 in x, y and/or z: for a grid resolution of 5, the grid size will be 200 / 5 => (40 x 40 x 40)
+- Points ranging from 0 to 0.05, for a grid resolution of 0.00156, the grid size will be 0.05 / 0.00156 => (32 x 32 x 32)
 
 #### Tested on Unity 2019.4.21
 
-## Example
+## Examples
+
+1) How to get all closest point of a point cloud ?
+2) How to get k neighbor points of a point cloud ?
 
 ```C#
   Vector3[] positions = new Vector3[N];
@@ -32,8 +52,7 @@
   
 ```
 
-## Grid vs KDtree (KNN implementation from: [https://github.com/ArthurBrussee/KNN](here)) (Intel i7 4790k)
-##### i7 4790k
+## Benchmark: Grid vs KDtree (KNN implementation from: [https://github.com/ArthurBrussee/KNN](here)) (Intel i7 4790k)
 
 - on 100k random positions between (-100, 100) and 10k queries: 
 
@@ -61,7 +80,12 @@
 
 ## Details
 
-When initializing, all points are distributed in a uniform grid. The resolution of the grid should depend on your data, make sure to __adjust this parameter for maximum performance and memory consumption__. You can also target a size grid by doing ```new GridSearchBurst(-1.0f, 64);``` to have a grid of 64x64x64.
+When initializing, all points are assigned to a cell in an uniform grid. The resolution of the grid should depend on your data, make sure to __adjust this parameter for maximum performance and memory consumption__. You can also target a size grid by doing ```new GridSearchBurst(-1.0f, 64);``` to have a grid of 64x64x64.
+
+For each point, the computed 3D grid cell is flatten into an unique hash and a couple ```(hash, index)``` is stored in the ```hashIndex``` array. This array is sorted by hash (thanks to the sorting code from https://coffeebraingames.wordpress.com/2020/06/07/a-multithreaded-sorting-attempt) so that each points in the same cell are successive in the array.
+
+
+For neighbor searching, the grid cell of the query point is computed, first we search this cell for neighbors using the sorted array that acts as a sort of neighbor list. If k neighbors were find we stop, otherwise we check neighbor cells for points that are close enough.
 
 
 ## Contribute
