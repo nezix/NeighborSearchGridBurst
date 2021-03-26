@@ -10,6 +10,7 @@ using Unity.Burst;
 //Multithreaded sort from https://coffeebraingames.wordpress.com/2020/06/07/a-multithreaded-sorting-attempt/
 
 public class GridSearchBurst {
+    const int MAXGRIDSIZE = 256;
 
     NativeArray<float3> positions;
     NativeArray<float3> sortedPos;
@@ -24,7 +25,7 @@ public class GridSearchBurst {
     int targetGridSize;
 
     public GridSearchBurst(float resolution, int targetGrid = 32) {
-        if (resolution <= 0.0f){
+        if (resolution <= 0.0f) {
             targetGridSize = targetGrid;
             return;
         }
@@ -47,6 +48,10 @@ public class GridSearchBurst {
 
         int gridSize = (int)math.ceil(maxDist / gridReso);
         gridDim = new int3(gridSize, gridSize, gridSize);
+
+        if ( gridSize > MAXGRIDSIZE) {
+            throw new System.Exception("Grid is to large, adjust the resolution");
+        }
 
         int NCells = gridDim.x * gridDim.y * gridDim.z;
 
@@ -119,10 +124,14 @@ public class GridSearchBurst {
     }
 
     public void clean() {
-        positions.Dispose();
-        hashIndex.Dispose();
-        cellStartEnd.Dispose();
-        sortedPos.Dispose();
+        if (positions.IsCreated)
+            positions.Dispose();
+        if (hashIndex.IsCreated)
+            hashIndex.Dispose();
+        if (cellStartEnd.IsCreated)
+            cellStartEnd.Dispose();
+        if (sortedPos.IsCreated)
+            sortedPos.Dispose();
     }
 
     public int[] searchClosestPoint(Vector3[] queryPoints, bool checkSelf = false, float epsilon = 0.001f) {
@@ -139,7 +148,9 @@ public class GridSearchBurst {
             sortedPos = sortedPos,
             hashIndex = hashIndex,
             cellStartEnd = cellStartEnd,
-            results = results
+            results = results,
+            ignoreSelf = checkSelf,
+            squaredepsilonSelf = epsilon * epsilon
         };
 
         var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
@@ -163,7 +174,7 @@ public class GridSearchBurst {
 
         int cellsToLoop = (int)math.ceil(rad / gridReso);
 
-        var closestPointJob = new FindWithinJob() {
+        var withinJob = new FindWithinJob() {
             squaredRadius = rad * rad,
             maxNeighbor = maxNeighborPerQuery,
             cellsToLoop = cellsToLoop,
@@ -177,8 +188,8 @@ public class GridSearchBurst {
             results = results
         };
 
-        var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
-        closestPointJobHandle.Complete();
+        var withinJobHandle = withinJob.Schedule(qPoints.Length, 16);
+        withinJobHandle.Complete();
 
         int[] res = new int[results.Length];
         SetNativeArrayInt(res, results);
@@ -404,6 +415,9 @@ public class GridSearchBurst {
         [ReadOnly] public NativeArray<int2> cellStartEnd;
         [ReadOnly] public NativeArray<float3> sortedPos;
         [ReadOnly] public NativeArray<int2> hashIndex;
+        [ReadOnly] public bool ignoreSelf;
+        [ReadOnly] public float squaredepsilonSelf;
+
         public NativeArray<int> results;
 
         void IJobParallelFor.Execute(int index) {
@@ -432,8 +446,16 @@ public class GridSearchBurst {
                     float d = math.distancesq(p, posA); //Squared distance
 
                     if (d < minD) {
-                        minRes = id;
-                        minD = d;
+                        if (ignoreSelf) {
+                            if (d > squaredepsilonSelf) {
+                                minRes = id;
+                                minD = d;
+                            }
+                        }
+                        else {
+                            minRes = id;
+                            minD = d;
+                        }
                     }
                 }
             }
@@ -465,8 +487,16 @@ public class GridSearchBurst {
                                             float d = math.distancesq(p, posA); //Squared distance
 
                                             if (d < minD) {
-                                                minRes = id;
-                                                minD = d;
+                                                if (ignoreSelf) {
+                                                    if (d > squaredepsilonSelf) {
+                                                        minRes = id;
+                                                        minD = d;
+                                                    }
+                                                }
+                                                else {
+                                                    minRes = id;
+                                                    minD = d;
+                                                }
                                             }
                                         }
                                     }
@@ -527,6 +557,28 @@ public class GridSearchBurst {
             int3 curGridId;
             int idRes = 0;
 
+            //First search for the corresponding cell
+            int neighcellhashf = flatten3DTo1D(cell, gridDim);
+            int idStartf = cellStartEnd[neighcellhashf].x;
+            int idStopf = cellStartEnd[neighcellhashf].y;
+
+            if (idStartf < int.MaxValue - 1) {
+                for (int id = idStartf; id < idStopf; id++) {
+
+                    float3 posA = sortedPos[id];
+                    float d = math.distancesq(p, posA); //Squared distance
+
+                    if (d <= squaredRadius) {
+                        results[index * maxNeighbor + idRes] = id;
+                        idRes++;
+                        //Found enough close points we can stop there
+                        if (idRes == maxNeighbor) {
+                            return;
+                        }
+                    }
+                }
+            }
+
             for (int x = -cellsToLoop; x <= cellsToLoop; x++) {
                 curGridId.x = cell.x + x;
                 if (curGridId.x >= 0 && curGridId.x < gridDim.x) {
@@ -536,6 +588,8 @@ public class GridSearchBurst {
                             for (int z = -cellsToLoop; z <= cellsToLoop; z++) {
                                 curGridId.z = cell.z + z;
                                 if (curGridId.z >= 0 && curGridId.z < gridDim.z) {
+                                    if (x == 0 && y == 0 && z == 0)
+                                        continue;//Already done that
 
                                     int neighcellhash = flatten3DTo1D(curGridId, gridDim);
                                     int idStart = cellStartEnd[neighcellhash].x;
@@ -550,6 +604,7 @@ public class GridSearchBurst {
                                             if (d <= squaredRadius) {
                                                 results[index * maxNeighbor + idRes] = id;
                                                 idRes++;
+                                                //Found enough close points we can stop there
                                                 if (idRes == maxNeighbor) {
                                                     return;
                                                 }
