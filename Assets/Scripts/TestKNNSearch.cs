@@ -13,6 +13,8 @@ using KNN.Jobs;
 
 using Random = UnityEngine.Random;
 
+namespace BurstGridSearch {
+
 public class TestKNNSearch : MonoBehaviour {
 
 
@@ -125,4 +127,5 @@ public class TestKNNSearch : MonoBehaviour {
 		// we create a scope where its 'safe' to get a pointer and directly manipulate the array
 	}
 
+}
 }

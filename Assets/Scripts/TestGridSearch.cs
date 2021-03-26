@@ -4,6 +4,8 @@ using System.Text;
 using System.IO;
 using System.Collections;
 
+namespace BurstGridSearch {
+
 public class TestGridSearch : MonoBehaviour {
 	public bool testClosestPoint = true;
 
@@ -174,4 +176,5 @@ public class TestGridSearch : MonoBehaviour {
 	}
 
 
+}
 }

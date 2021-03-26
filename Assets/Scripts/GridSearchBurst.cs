@@ -9,6 +9,8 @@ using Unity.Burst;
 
 //Multithreaded sort from https://coffeebraingames.wordpress.com/2020/06/07/a-multithreaded-sorting-attempt/
 
+namespace BurstGridSearch {
+
 public class GridSearchBurst {
     const int MAXGRIDSIZE = 256;
 
@@ -859,4 +861,6 @@ public static class MultithreadedSort {
             }
         }
     }
+}
+
 }
