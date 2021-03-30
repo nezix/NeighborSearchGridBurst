@@ -574,7 +574,7 @@ public class GridSearchBurst {
                     float d = math.distancesq(p, posA); //Squared distance
 
                     if (d <= squaredRadius) {
-                        results[index * maxNeighbor + idRes] = id;
+                        results[index * maxNeighbor + idRes] = hashIndex[id].y;
                         idRes++;
                         //Found enough close points we can stop there
                         if (idRes == maxNeighbor) {
@@ -607,7 +607,7 @@ public class GridSearchBurst {
                                             float d = math.distancesq(p, posA); //Squared distance
 
                                             if (d <= squaredRadius) {
-                                                results[index * maxNeighbor + idRes] = id;
+                                                results[index * maxNeighbor + idRes] = hashIndex[id].y;
                                                 idRes++;
                                                 //Found enough close points we can stop there
                                                 if (idRes == maxNeighbor) {
