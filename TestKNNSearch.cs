@@ -1,3 +1,4 @@
+/*---------Install KNN package first
 using UnityEngine;
 using UnityEngine.UI;
 using System.Text;
@@ -129,3 +130,4 @@ public class TestKNNSearch : MonoBehaviour {
 
 }
 }
+*/
