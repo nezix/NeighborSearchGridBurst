@@ -523,8 +523,16 @@ public class GridSearchBurst {
                     float d = math.distancesq(p, posA); //Squared distance
 
                     if (d < minD) {
-                        minRes = id;
-                        minD = d;
+                        if (ignoreSelf) {
+                            if (d > squaredepsilonSelf) {
+                                minRes = id;
+                                minD = d;
+                            }
+                        }
+                        else {
+                            minRes = id;
+                            minD = d;
+                        }
                     }
                 }
                 results[index] = hashIndex[minRes].y;
