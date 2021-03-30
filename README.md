@@ -25,6 +25,9 @@ Example cases:
 2) How to get k neighbor points of a point cloud ?
 
 ```C#
+  using BurstGridSearch;
+  ...
+
   Vector3[] positions = new Vector3[N];
   Vector3[] queries = new Vector3[K];
   //Fill the arrays...
