@@ -398,7 +398,7 @@ public class GridSearchBurst {
 
             if (index == pos.Length - 1) {
                 newV.x = cellStartEnd[hash].x;
-                newV.y = index + 1;
+                newV.y = index;
 
                 cellStartEnd[hash] = newV; // set end
             }
