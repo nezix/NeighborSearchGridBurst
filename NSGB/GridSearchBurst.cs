@@ -66,6 +66,7 @@ public class GridSearchBurst {
             invresoGrid = 1.0f / gridReso,
             gridDim = gridDim,
             pos = positions,
+            nbcells = NCells,
             hashIndex = hashIndex
         };
         var assignHashJobHandle = assignHashJob.Schedule(positions.Length, 128);
@@ -119,9 +120,8 @@ public class GridSearchBurst {
             sortedPos = sortedPos
         };
 
-        var sortCellJobHandle = sortCellJob.Schedule(positions.Length, new JobHandle());
+        var sortCellJobHandle = sortCellJob.Schedule();
         sortCellJobHandle.Complete();
-
 
     }
 
@@ -281,6 +281,7 @@ public class GridSearchBurst {
         [ReadOnly] public float3 oriGrid;
         [ReadOnly] public float invresoGrid;
         [ReadOnly] public int3 gridDim;
+        [ReadOnly] public int nbcells;
         [ReadOnly] public NativeArray<float3> pos;
         public NativeArray<int2> hashIndex;
 
@@ -291,6 +292,7 @@ public class GridSearchBurst {
             int3 cell = spaceToGrid(p, oriGrid, invresoGrid);
             cell = math.min(cell, gridDim - new int3(1, 1, 1));
             int hash = flatten3DTo1D(cell, gridDim);
+            hash = math.clamp(hash, 0, nbcells - 1);
 
             int2 v;
             v.x = hash;
@@ -363,7 +365,7 @@ public class GridSearchBurst {
 
 
     [BurstCompile]
-    struct SortCellJob : IJobFor {
+    struct SortCellJob : IJob {
 
         [ReadOnly] public NativeArray<float3> pos;
         [ReadOnly] public NativeArray<int2> hashIndex;
@@ -372,39 +374,40 @@ public class GridSearchBurst {
 
         public NativeArray<float3> sortedPos;
 
-        void IJobFor.Execute(int index) {
+        void IJob.Execute() {
+            for(int index = 0; index < hashIndex.Length; index++) {
+                int hash = hashIndex[index].x;
+                int id = hashIndex[index].y;
+                int2 newV;
 
-            int hash = hashIndex[index].x;
-            int id = hashIndex[index].y;
-            int2 newV;
+                int hashm1 = -1;
+                if (index != 0)
+                    hashm1 = hashIndex[index - 1].x;
 
-            int hashm1 = -1;
-            if (index != 0)
-                hashm1 = hashIndex[index - 1].x;
+                if (index == 0 || hash != hashm1) {
 
-            if (index == 0 || hash != hashm1) {
+                    newV.x = index;
+                    newV.y = cellStartEnd[hash].y;
 
-                newV.x = index;
-                newV.y = cellStartEnd[hash].y;
+                    cellStartEnd[hash] = newV; // set start
 
-                cellStartEnd[hash] = newV; // set start
-
-                if (index != 0) {
-                    newV.x = cellStartEnd[hashm1].x;
-                    newV.y = index;
-                    cellStartEnd[hashm1] = newV; // set end
+                    if (index != 0) {
+                        newV.x = cellStartEnd[hashm1].x;
+                        newV.y = index;
+                        cellStartEnd[hashm1] = newV; // set end
+                    }
                 }
+
+                if (index == pos.Length - 1) {
+                    newV.x = cellStartEnd[hash].x;
+                    newV.y = index;
+
+                    cellStartEnd[hash] = newV; // set end
+                }
+
+                // Reorder atoms according to sorted indices
+                sortedPos[index] = pos[id];
             }
-
-            if (index == pos.Length - 1) {
-                newV.x = cellStartEnd[hash].x;
-                newV.y = index;
-
-                cellStartEnd[hash] = newV; // set end
-            }
-
-            // Reorder atoms according to sorted indices
-            sortedPos[index] = pos[id];
         }
     }
 
