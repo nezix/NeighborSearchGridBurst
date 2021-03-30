@@ -57,7 +57,7 @@ public class GridSearchBurst {
 
         int NCells = gridDim.x * gridDim.y * gridDim.z;
 
-        hashIndex = new NativeArray<int2>(pos.Length, Allocator.TempJob);
+        hashIndex = new NativeArray<int2>(pos.Length, Allocator.Persistent);
         sortedPos = new NativeArray<float3>(pos.Length, Allocator.Persistent);
         cellStartEnd = new NativeArray<int2>(NCells, Allocator.Persistent);
 
