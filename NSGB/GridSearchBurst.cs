@@ -89,7 +89,7 @@ public class GridSearchBurst {
         assignHashJobHandle.Complete();
 
 
-        NativeArray<SortEntry> entries = new NativeArray<SortEntry>(positions.Length, Allocator.Temp);
+        NativeArray<SortEntry> entries = new NativeArray<SortEntry>(positions.Length, Allocator.TempJob);
 
         var populateJob = new PopulateEntryJob() {
             hashIndex = hashIndex,
@@ -186,7 +186,7 @@ public class GridSearchBurst {
         assignHashJobHandle.Complete();
 
 
-        NativeArray<SortEntry> entries = new NativeArray<SortEntry>(positions.Length, Allocator.Temp);
+        NativeArray<SortEntry> entries = new NativeArray<SortEntry>(positions.Length, Allocator.TempJob);
 
         var populateJob = new PopulateEntryJob() {
             hashIndex = hashIndex,
