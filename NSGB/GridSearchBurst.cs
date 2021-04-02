@@ -116,10 +116,11 @@ public class GridSearchBurst {
 
         };
 
-        entries.Dispose();
 
         var depopulateJobHandle = depopulateJob.Schedule(positions.Length, 128);
         depopulateJobHandle.Complete();
+        
+        entries.Dispose();
 
         // ------- Sort (end)
 
