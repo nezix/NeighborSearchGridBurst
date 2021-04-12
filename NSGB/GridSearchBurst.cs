@@ -55,6 +55,10 @@ public class GridSearchBurst {
     }
 
     private void _initGrid() {
+        
+        if(positions.Length == 0) {
+            throw new System.Exception("Empty position buffer");
+        }
         getMinMaxCoords(positions, ref minValue, ref maxValue);
 
         float3 sidelen = maxValue - minValue;
