@@ -2,12 +2,12 @@
 ---------------
 
 ## This is a fast, parallel (C# job system) and vectorized (Burst compiled) code for Unity for k-neighbor search.
-For some data, it can be faster than using a KDtree (can be 25 times faster than fast KDTree KNN from [https://github.com/ArthurBrussee/KNN](here)).
+For some data, it can be faster than using a KDtree (can be 25 times faster than fast KDTree KNN from https://github.com/ArthurBrussee/KNN.
 
 #### Best case scenario: uniformly distributed points in space
 #### Worst case scenario: nearly all points close to each others and some points far from the cluster
 
-**For k-neighbor search, if maxNeighborPerQuery is not enough, the search does not return all points close to the query point. It can skip points that are closer to the one returned**
+- **For k-neighbor search, if maxNeighborPerQuery is not enough, the search does not return all points close to the query point. It can skip points that are closer to the one returned**
 
 Parameters to adjust:
 - Grid resolution, adjust this parameter according to your data, density per cell shouldn't be too large for performance, not too low for memory consumption
@@ -57,7 +57,7 @@ Example cases:
   
 ```
 
-## Benchmark: Grid vs KDtree (KNN implementation from: [https://github.com/ArthurBrussee/KNN](here)) (Intel i7 4790k)
+## Benchmark: Grid vs KDtree (KNN implementation from: https://github.com/ArthurBrussee/KNN ) (Intel i7 4790k)
 
 - on 100k random positions between (-100, 100) and 10k queries: 
 
