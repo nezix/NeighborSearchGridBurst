@@ -92,6 +92,10 @@ For each point, the computed 3D grid cell is flatten into an unique hash and a c
 
 For neighbor searching, the grid cell of the query point is computed, first we search this cell for neighbors using the sorted array that acts as a sort of neighbor list. If k neighbors were find we stop, otherwise we check neighbor cells for points that are close enough.
 
+## Installation
+Add the git url to the package manager: https://docs.unity3d.com/Manual/upm-ui-giturl.html
+
+[<img src="https://docs.unity3d.com/uploads/Main/PackageManagerUI-GitURLPackageButton.png">](https://docs.unity3d.com/Manual/upm-ui-giturl.html)
 
 ## Contribute
 
