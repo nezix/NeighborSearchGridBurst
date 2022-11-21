@@ -185,7 +185,7 @@ namespace BurstGridSearch
             {
                 return;
             }
-            
+
             newPos.CopyTo(positions);
 
             getMinMaxCoords(positions, ref minValue, ref maxValue);
