@@ -663,7 +663,7 @@ namespace BurstGridSearch
 
                 if (idStartf < int.MaxValue - 1)
                 {
-                    for (int id = idStartf; id < idStopf; id++)
+                    for (int id = idStartf; id <= idStopf; id++)
                     {
 
                         float3 posA = sortedPos[id];
@@ -822,7 +822,7 @@ namespace BurstGridSearch
 
                 if (idStartf < int.MaxValue - 1)
                 {
-                    for (int id = idStartf; id < idStopf; id++)
+                    for (int id = idStartf; id <= idStopf; id++)
                     {
 
                         float3 posA = sortedPos[id];
