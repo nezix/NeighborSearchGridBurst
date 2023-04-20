@@ -498,7 +498,7 @@ namespace BurstGridSearch
                 float3 p = pos[index];
 
                 int3 cell = spaceToGrid(p, oriGrid, invresoGrid);
-                cell = math.min(cell, gridDim - new int3(1, 1, 1));
+                cell = math.clamp(cell, new int3(0, 0, 0), gridDim - new int3(1, 1, 1));
                 int hash = flatten3DTo1D(cell, gridDim);
                 hash = math.clamp(hash, 0, nbcells - 1);
 
@@ -647,7 +647,7 @@ namespace BurstGridSearch
                 float3 p = queryPos[index];
 
                 int3 cell = spaceToGrid(p, oriGrid, invresoGrid);
-                cell = math.min(cell, gridDim - new int3(1, 1, 1));
+                cell = math.clamp(cell, new int3(0, 0, 0), gridDim - new int3(1, 1, 1));
 
                 float minD = float.MaxValue;
                 int3 curGridId;
@@ -810,7 +810,7 @@ namespace BurstGridSearch
                 float3 p = queryPos[index];
 
                 int3 cell = spaceToGrid(p, oriGrid, invresoGrid);
-                cell = math.min(cell, gridDim - new int3(1, 1, 1));
+                cell = math.clamp(cell, new int3(0, 0, 0), gridDim - new int3(1, 1, 1));
 
                 int3 curGridId;
                 int idRes = 0;
