@@ -30,10 +30,14 @@ namespace BurstGridSearch
 
         public GridSearchBurst(float resolution, int targetGrid = 32)
         {
-            if (resolution <= 0.0f)
+            if (resolution <= 0.0f && targetGrid > 0)
             {
                 targetGridSize = targetGrid;
                 return;
+            }
+            else if (resolution <= 0.0f && targetGrid <= 0)
+            {
+                throw new System.Exception("Wrong target grid size. Choose a resolution > 0 or a target grid > 0");
             }
             gridReso = resolution;
         }
@@ -41,8 +45,7 @@ namespace BurstGridSearch
         public void initGrid(Vector3[] pos)
         {
 
-            positions = new NativeArray<float3>(pos.Length, Allocator.Persistent);
-            GetNativeArray(positions, pos);
+            positions = new NativeArray<Vector3>(pos, Allocator.Persistent).Reinterpret<float3>();
 
             _initGrid();
         }
@@ -54,12 +57,10 @@ namespace BurstGridSearch
             pos.CopyTo(positions);
 
             _initGrid();
-
         }
 
         private void _initGrid()
         {
-
             if (positions.Length == 0)
             {
                 throw new System.Exception("Empty position buffer");
@@ -69,8 +70,9 @@ namespace BurstGridSearch
             float3 sidelen = maxValue - minValue;
             float maxDist = math.max(sidelen.x, math.max(sidelen.y, sidelen.z));
 
+            //Compute a resolution so that the grid is equal to 32*32*32 cells
             if (gridReso <= 0.0f)
-            {//Compute a resolution so that the grid is equal to 32*32*32 cells
+            {
                 gridReso = maxDist / (float)targetGridSize;
             }
 
@@ -100,7 +102,6 @@ namespace BurstGridSearch
             var assignHashJobHandle = assignHashJob.Schedule(positions.Length, 128);
             assignHashJobHandle.Complete();
 
-
             NativeArray<SortEntry> entries = new NativeArray<SortEntry>(positions.Length, Allocator.TempJob);
 
             var populateJob = new PopulateEntryJob()
@@ -127,9 +128,7 @@ namespace BurstGridSearch
             {
                 hashIndex = hashIndex,
                 entries = entries
-
             };
-
 
             var depopulateJobHandle = depopulateJob.Schedule(positions.Length, 128);
             depopulateJobHandle.Complete();
@@ -153,6 +152,7 @@ namespace BurstGridSearch
                 sortedPos = sortedPos
             };
 
+
             var sortCellJobHandle = sortCellJob.Schedule();
             sortCellJobHandle.Complete();
         }
@@ -172,8 +172,7 @@ namespace BurstGridSearch
 
         public void updatePositions(Vector3[] newPos)
         {
-            NativeArray<float3> tempPositions = new NativeArray<float3>(newPos.Length, Allocator.TempJob);
-            GetNativeArray(tempPositions, newPos);
+            NativeArray<float3> tempPositions = new NativeArray<Vector3>(newPos, Allocator.TempJob).Reinterpret<float3>();
             updatePositions(tempPositions);
             tempPositions.Dispose();
         }
@@ -279,9 +278,8 @@ namespace BurstGridSearch
         public int[] searchClosestPoint(Vector3[] queryPoints, bool checkSelf = false, float epsilon = 0.001f)
         {
 
-            NativeArray<float3> qPoints = new NativeArray<float3>(queryPoints.Length, Allocator.TempJob);
+            NativeArray<float3> qPoints = new NativeArray<Vector3>(queryPoints, Allocator.TempJob).Reinterpret<float3>();
             NativeArray<int> results = new NativeArray<int>(queryPoints.Length, Allocator.TempJob);
-            GetNativeArray(qPoints, queryPoints);
 
             var closestPointJob = new ClosestPointJob()
             {
@@ -301,7 +299,7 @@ namespace BurstGridSearch
             closestPointJobHandle.Complete();
 
             int[] res = new int[qPoints.Length];
-            SetNativeArrayInt(res, results);
+            results.CopyTo(res);
 
             qPoints.Dispose();
             results.Dispose();
@@ -337,10 +335,8 @@ namespace BurstGridSearch
         public int[] searchWithin(Vector3[] queryPoints, float rad, int maxNeighborPerQuery)
         {
 
-            NativeArray<float3> qPoints = new NativeArray<float3>(queryPoints.Length, Allocator.TempJob);
+            NativeArray<float3> qPoints = new NativeArray<Vector3>(queryPoints, Allocator.TempJob).Reinterpret<float3>();
             NativeArray<int> results = new NativeArray<int>(queryPoints.Length * maxNeighborPerQuery, Allocator.TempJob);
-            GetNativeArray(qPoints, queryPoints);
-
             int cellsToLoop = (int)math.ceil(rad / gridReso);
 
             var withinJob = new FindWithinJob()
@@ -362,7 +358,7 @@ namespace BurstGridSearch
             withinJobHandle.Complete();
 
             int[] res = new int[results.Length];
-            SetNativeArrayInt(res, results);
+            results.CopyTo(res);
 
             qPoints.Dispose();
             results.Dispose();
@@ -395,44 +391,10 @@ namespace BurstGridSearch
             var withinJobHandle = withinJob.Schedule(queryPoints.Length, 16);
             withinJobHandle.Complete();
 
-            // int[] res = new int[results.Length];
-            // SetNativeArrayInt(res, results);
-
-            // results.Dispose();
-
             return results;
         }
 
-
         //---------------------------------------------
-
-
-        //From https://gist.github.com/LotteMakesStuff/c2f9b764b15f74d14c00ceb4214356b4
-        static unsafe void GetNativeArray(NativeArray<float3> posNativ, Vector3[] posArray)
-        {
-
-            // pin the buffer in place...
-            fixed (void* bufferPointer = posArray)
-            {
-                // ...and use memcpy to copy the Vector3[] into a NativeArray<floar3> without casting. whould be fast!
-                UnsafeUtility.MemCpy(NativeArrayUnsafeUtility.GetUnsafeBufferPointerWithoutChecks(posNativ),
-                                     bufferPointer, posArray.Length * (long)UnsafeUtility.SizeOf<float3>());
-            }
-            // we only have to fix the .net array in place, the NativeArray is allocated in the C++ side of the engine and
-            // wont move arround unexpectedly. We have a pointer to it not a reference! thats basically what fixed does,
-            // we create a scope where its 'safe' to get a pointer and directly manipulate the array
-        }
-
-
-        unsafe static void SetNativeArrayInt(int[] arr, NativeArray<int> nativ)
-        {
-            // pin the target array and get a pointer to it
-            fixed (void* arrPointer = arr)
-            {
-                // memcopy the native array over the top
-                UnsafeUtility.MemCpy(arrPointer, NativeArrayUnsafeUtility.GetUnsafeBufferPointerWithoutChecks(nativ), arr.Length * (long)UnsafeUtility.SizeOf<int>());
-            }
-        }
 
         void getMinMaxCoords(NativeArray<float3> mpos, ref float3 minV, ref float3 maxV)
         {
@@ -525,54 +487,6 @@ namespace BurstGridSearch
             }
         }
 
-
-        // [BurstCompile]
-        // struct SortCellJob : IJobParallelFor {
-
-        //  [ReadOnly] public NativeArray<float3> pos;
-        //  [ReadOnly] public NativeArray<int2> hashIndex;
-
-        //  [NativeDisableParallelForRestriction]
-        //  public NativeArray<int2> cellStartEnd;
-
-        //  public NativeArray<float3> sortedPos;
-
-
-        //  void IJobParallelFor.Execute(int index)
-        //  {
-        //      int hash = hashIndex[index].x;
-        //      int id = hashIndex[index].y;
-        //      int2 newV;
-
-        //      int hashm1 = -1;
-        //      if (index != 0)
-        //          hashm1 = hashIndex[index - 1].x;
-
-        //      if (index == 0 || hash != hashm1) {
-        //          newV.x = index;
-        //          newV.y = cellStartEnd[hash].y;
-
-        //          cellStartEnd[hash] = newV; // set start
-
-        //          if (index != 0) {
-        //              newV.y = index;
-        //              cellStartEnd[hashm1] = newV; // set end
-        //          }
-        //      }
-
-        //      if (index == pos.Length - 1) {
-        //          newV.x = cellStartEnd[hash].x;
-        //          newV.y = index + 1;
-
-        //          cellStartEnd[hash] = newV; // set end
-        //      }
-
-        //      // Reorder atoms according to sorted indices
-        //      sortedPos[index] = pos[id];
-        //  }
-        // }
-
-
         [BurstCompile(CompileSynchronously = true)]
         struct SortCellJob : IJob
         {
@@ -596,6 +510,7 @@ namespace BurstGridSearch
                     if (index != 0)
                         hashm1 = hashIndex[index - 1].x;
 
+
                     if (index == 0 || hash != hashm1)
                     {
 
@@ -615,7 +530,7 @@ namespace BurstGridSearch
                     if (index == pos.Length - 1)
                     {
                         newV.x = cellStartEnd[hash].x;
-                        newV.y = index;
+                        newV.y = index + 1;
 
                         cellStartEnd[hash] = newV; // set end
                     }
@@ -663,7 +578,7 @@ namespace BurstGridSearch
 
                 if (idStartf < int.MaxValue - 1)
                 {
-                    for (int id = idStartf; id <= idStopf; id++)
+                    for (int id = idStartf; id < idStopf; id++)
                     {
 
                         float3 posA = sortedPos[id];
@@ -820,14 +735,14 @@ namespace BurstGridSearch
                 int idStartf = cellStartEnd[neighcellhashf].x;
                 int idStopf = cellStartEnd[neighcellhashf].y;
 
+
                 if (idStartf < int.MaxValue - 1)
                 {
-                    for (int id = idStartf; id <= idStopf; id++)
+                    for (int id = idStartf; id < idStopf; id++)
                     {
 
                         float3 posA = sortedPos[id];
                         float d = math.distancesq(p, posA); //Squared distance
-
                         if (d <= squaredRadius)
                         {
                             results[index * maxNeighbor + idRes] = hashIndex[id].y;
@@ -858,6 +773,7 @@ namespace BurstGridSearch
                                     {
                                         if (x == 0 && y == 0 && z == 0)
                                             continue;//Already done that
+
 
                                         int neighcellhash = flatten3DTo1D(curGridId, gridDim);
                                         int idStart = cellStartEnd[neighcellhash].x;
@@ -891,9 +807,6 @@ namespace BurstGridSearch
                 }
             }
         }
-
-
-
 
         //--------- Fast sort stuff
         [BurstCompile(CompileSynchronously = true)]
@@ -966,8 +879,6 @@ namespace BurstGridSearch
         }
     }
 
-
-
     public static class MultithreadedSort
     {
         // Use quicksort when sub-array length is less than or equal than this value
@@ -983,8 +894,6 @@ namespace BurstGridSearch
         // where T : unmanaged, IComparable<T> {
         //     return NativeSortExtension.SortJob(array, parentHandle);
         // }
-
-
 
 
         private static JobHandle MergeSort<T>(NativeArray<T> array, SortRange range, JobHandle parentHandle) where T : unmanaged, IComparable<T>
