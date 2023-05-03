@@ -76,7 +76,7 @@ namespace BurstGridSearch
                 gridReso = maxDist / (float)targetGridSize;
             }
 
-            int gridSize = (int)math.ceil(maxDist / gridReso);
+            int gridSize = math.max(1, (int)math.ceil(maxDist / gridReso));
             gridDim = new int3(gridSize, gridSize, gridSize);
 
             if (gridSize > MAXGRIDSIZE)
