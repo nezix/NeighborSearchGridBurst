@@ -81,7 +81,7 @@ namespace BurstGridSearch
 
             if (gridSize > MAXGRIDSIZE)
             {
-                throw new System.Exception("Grid is to large, adjust the resolution");
+                throw new System.Exception("Grid is too large, adjust the resolution");
             }
 
             int NCells = gridDim.x * gridDim.y * gridDim.z;
