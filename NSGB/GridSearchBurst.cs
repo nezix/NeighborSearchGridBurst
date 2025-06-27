@@ -568,10 +568,6 @@ namespace BurstGridSearch
                 int3 curGridId;
                 int minRes = -1;
 
-
-                cell = math.clamp(cell, new int3(0, 0, 0), gridDim - new int3(1, 1, 1));
-
-
                 int neighcellhashf = flatten3DTo1D(cell, gridDim);
                 int idStartf = cellStartEnd[neighcellhashf].x;
                 int idStopf = cellStartEnd[neighcellhashf].y;
