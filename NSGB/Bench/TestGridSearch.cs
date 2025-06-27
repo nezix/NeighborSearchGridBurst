@@ -61,7 +61,7 @@ public class TestGridSearch : MonoBehaviour {
 
 			int[] results = null;
 			if(testClosestPoint)
-				results = gsb.searchClosestPoint(queries);
+				results = gsb.searchClosestPoint(queries, 100.0f);
 			else
 		    	results = gsb.searchWithin(queries, radSearch, maxNei);
 			lastresults = results;
