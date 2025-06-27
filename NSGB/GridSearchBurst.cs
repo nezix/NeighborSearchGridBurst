@@ -275,7 +275,7 @@ namespace BurstGridSearch
             sortCellJobHandle.Complete();
         }
 
-        public int[] searchClosestPoint(Vector3[] queryPoints, float maximumDistance, bool checkSelf = false, float epsilon = 0.001f)
+        public int[] searchClosestPoint(Vector3[] queryPoints, bool checkSelf = false, float epsilon = 0.001f)
         {
 
             NativeArray<float3> qPoints = new NativeArray<Vector3>(queryPoints, Allocator.TempJob).Reinterpret<float3>();
@@ -293,7 +293,6 @@ namespace BurstGridSearch
                 results = results,
                 ignoreSelf = checkSelf,
                 squaredepsilonSelf = epsilon * epsilon,
-                maxDistance = maximumDistance
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
@@ -308,7 +307,7 @@ namespace BurstGridSearch
             return res;
         }
 
-        public NativeArray<int> searchClosestPoint(NativeArray<float3> qPoints, float maximumDistance, bool checkSelf = false, float epsilon = 0.001f)
+        public NativeArray<int> searchClosestPoint(NativeArray<float3> qPoints, bool checkSelf = false, float epsilon = 0.001f)
         {
 
             NativeArray<int> results = new NativeArray<int>(qPoints.Length, Allocator.TempJob);
@@ -325,7 +324,6 @@ namespace BurstGridSearch
                 results = results,
                 ignoreSelf = checkSelf,
                 squaredepsilonSelf = epsilon * epsilon,
-                maxDistance = maximumDistance
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
@@ -555,7 +553,6 @@ namespace BurstGridSearch
             [ReadOnly] public NativeArray<int2> hashIndex;
             [ReadOnly] public bool ignoreSelf;
             [ReadOnly] public float squaredepsilonSelf;
-            [ReadOnly] public float maxDistance;
 
             public NativeArray<int> results;
 
@@ -571,47 +568,7 @@ namespace BurstGridSearch
                 int3 curGridId;
                 int minRes = -1;
 
-                int neighcellhashf = flatten3DTo1D(cell, gridDim);
-                int idStartf = cellStartEnd[neighcellhashf].x;
-                int idStopf = cellStartEnd[neighcellhashf].y;
-
-                if (idStartf < int.MaxValue - 1)
-                {
-                    for (int id = idStartf; id < idStopf; id++)
-                    {
-
-                        float3 posA = sortedPos[id];
-                        float d = math.distancesq(p, posA); //Squared distance
-
-                        if (d < minD)
-                        {
-                            if (ignoreSelf)
-                            {
-                                if (d > squaredepsilonSelf)
-                                {
-                                    minRes = id;
-                                    minD = d;
-                                }
-                            }
-                            else
-                            {
-                                minRes = id;
-                                minD = d;
-                            }
-                        }
-                    }
-                }
-
-                if (minRes != -1)
-                {
-                    results[index] = hashIndex[minRes].y;
-                    return;
-                }
-
-                //Corresponding cell was empty, let's search in neighbor cells
-                int cellsToLoop = (int)math.ceil(maxDistance * invresoGrid) / 2;
-                cellsToLoop = math.max(1, cellsToLoop);
-                for (int x = -cellsToLoop; x <= cellsToLoop; x++)
+                for (int x = -1; x <= 1; x++)
                 {
                     curGridId.x = cell.x + x;
                     if (curGridId.x >= 0 && curGridId.x < gridDim.x)
