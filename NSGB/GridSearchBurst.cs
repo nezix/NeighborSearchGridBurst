@@ -292,7 +292,7 @@ namespace BurstGridSearch
                 cellStartEnd = cellStartEnd,
                 results = results,
                 ignoreSelf = checkSelf,
-                squaredepsilonSelf = epsilon * epsilon
+                squaredepsilonSelf = epsilon * epsilon,
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
@@ -323,7 +323,7 @@ namespace BurstGridSearch
                 cellStartEnd = cellStartEnd,
                 results = results,
                 ignoreSelf = checkSelf,
-                squaredepsilonSelf = epsilon * epsilon
+                squaredepsilonSelf = epsilon * epsilon,
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
@@ -568,48 +568,6 @@ namespace BurstGridSearch
                 int3 curGridId;
                 int minRes = -1;
 
-
-                cell = math.clamp(cell, new int3(0, 0, 0), gridDim - new int3(1, 1, 1));
-
-
-                int neighcellhashf = flatten3DTo1D(cell, gridDim);
-                int idStartf = cellStartEnd[neighcellhashf].x;
-                int idStopf = cellStartEnd[neighcellhashf].y;
-
-                if (idStartf < int.MaxValue - 1)
-                {
-                    for (int id = idStartf; id < idStopf; id++)
-                    {
-
-                        float3 posA = sortedPos[id];
-                        float d = math.distancesq(p, posA); //Squared distance
-
-                        if (d < minD)
-                        {
-                            if (ignoreSelf)
-                            {
-                                if (d > squaredepsilonSelf)
-                                {
-                                    minRes = id;
-                                    minD = d;
-                                }
-                            }
-                            else
-                            {
-                                minRes = id;
-                                minD = d;
-                            }
-                        }
-                    }
-                }
-
-                if (minRes != -1)
-                {
-                    results[index] = hashIndex[minRes].y;
-                    return;
-                }
-
-                //Corresponding cell was empty, let's search in neighbor cells
                 for (int x = -1; x <= 1; x++)
                 {
                     curGridId.x = cell.x + x;
