@@ -610,7 +610,7 @@ namespace BurstGridSearch
 
                 //Corresponding cell was empty, let's search in neighbor cells
                 int cellsToLoop = (int)math.ceil(maxDistance * invresoGrid) / 2;
-                for (int x = -1; x <= 1; x++)
+                for (int x = -cellsToLoop; x <= cellsToLoop; x++)
                 {
                     curGridId.x = cell.x + x;
                     if (curGridId.x >= 0 && curGridId.x < gridDim.x)
