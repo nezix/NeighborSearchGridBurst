@@ -275,7 +275,7 @@ namespace BurstGridSearch
             sortCellJobHandle.Complete();
         }
 
-        public int[] searchClosestPoint(Vector3[] queryPoints, bool checkSelf = false, float epsilon = 0.001f)
+        public int[] searchClosestPoint(Vector3[] queryPoints, float maximumDistance, bool checkSelf = false, float epsilon = 0.001f)
         {
 
             NativeArray<float3> qPoints = new NativeArray<Vector3>(queryPoints, Allocator.TempJob).Reinterpret<float3>();
@@ -292,7 +292,8 @@ namespace BurstGridSearch
                 cellStartEnd = cellStartEnd,
                 results = results,
                 ignoreSelf = checkSelf,
-                squaredepsilonSelf = epsilon * epsilon
+                squaredepsilonSelf = epsilon * epsilon,
+                maxDistance = maximumDistance
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
@@ -307,7 +308,7 @@ namespace BurstGridSearch
             return res;
         }
 
-        public NativeArray<int> searchClosestPoint(NativeArray<float3> qPoints, bool checkSelf = false, float epsilon = 0.001f)
+        public NativeArray<int> searchClosestPoint(NativeArray<float3> qPoints, float maximumDistance, bool checkSelf = false, float epsilon = 0.001f)
         {
 
             NativeArray<int> results = new NativeArray<int>(qPoints.Length, Allocator.TempJob);
@@ -323,7 +324,8 @@ namespace BurstGridSearch
                 cellStartEnd = cellStartEnd,
                 results = results,
                 ignoreSelf = checkSelf,
-                squaredepsilonSelf = epsilon * epsilon
+                squaredepsilonSelf = epsilon * epsilon,
+                maxDistance = maximumDistance
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
@@ -553,6 +555,7 @@ namespace BurstGridSearch
             [ReadOnly] public NativeArray<int2> hashIndex;
             [ReadOnly] public bool ignoreSelf;
             [ReadOnly] public float squaredepsilonSelf;
+            [ReadOnly] public float maxDistance;
 
             public NativeArray<int> results;
 
@@ -606,6 +609,7 @@ namespace BurstGridSearch
                 }
 
                 //Corresponding cell was empty, let's search in neighbor cells
+                int cellsToLoop = (int)math.ceil(maxDistance * invresoGrid) / 2;
                 for (int x = -1; x <= 1; x++)
                 {
                     curGridId.x = cell.x + x;
