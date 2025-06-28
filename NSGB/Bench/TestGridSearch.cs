@@ -51,7 +51,8 @@ public class TestGridSearch : MonoBehaviour {
 
 			GridSearchBurst gsb = new GridSearchBurst(-1.0f, 28);
 
-			gsb.initGrid(pos);
+			var handle = gsb.InitializeGrid(pos);
+			handle.Complete();
 
 			float res1 = (1000.0f * (Time.realtimeSinceStartup - start));
 			if (i != 0)//warmup
@@ -61,9 +62,9 @@ public class TestGridSearch : MonoBehaviour {
 
 			int[] results = null;
 			if(testClosestPoint)
-				results = gsb.searchClosestPoint(queries);
+				results = gsb.SearchClosestPoint(queries);
 			else
-		    	results = gsb.searchWithin(queries, radSearch, maxNei);
+		    	results = gsb.SearchWithin(queries, radSearch, maxNei);
 			lastresults = results;
 
 			// UnityEngine.Debug.Log("Time for grid search: " + (1000.0f * (Time.realtimeSinceStartup - start)).ToString("f3") + " ms");
@@ -91,7 +92,7 @@ public class TestGridSearch : MonoBehaviour {
 			if (mytext != null) {
 				mytext.text = "Creation " + res1.ToString("f3") + "ms\nSearch = " + res2.ToString("f3") + " ms";
 			}
-			gsb.clean();
+			gsb.Dispose();
 
 			// yield return new WaitForSeconds(1);
 			// yield break;
