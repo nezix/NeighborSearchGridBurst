@@ -17,7 +17,7 @@ namespace BurstGridSearch
         private NativeArray<float3> _positions;
         private NativeArray<float3> _sortedPositions;
         private NativeArray<int2> _hashIndex;
-        private NativeArray<int2> _cellStartEnd;
+        private NativeList<int2> _cellStartEnd;
         private NativeArray<float3> _minMaxPositions;
         private NativeArray<int3> _gridDimensions;
         
@@ -41,6 +41,7 @@ namespace BurstGridSearch
             _positions = new NativeArray<float3>(positions.Length, Allocator.Persistent);
             _hashIndex = new (positions.Length, Allocator.Persistent);
             _sortedPositions = new (positions.Length, Allocator.Persistent);
+            _cellStartEnd = new (Allocator.Persistent);
             positions.CopyTo(_positions);
             return InitializeGridInternal();
         }
@@ -51,6 +52,7 @@ namespace BurstGridSearch
             _positions = new NativeArray<Vector3>(positions, Allocator.Persistent).Reinterpret<float3>();
             _hashIndex = new (positions.Length, Allocator.Persistent);
             _sortedPositions = new (positions.Length, Allocator.Persistent);
+            _cellStartEnd = new (Allocator.Persistent);
             return InitializeGridInternal();
         }
         
@@ -59,9 +61,9 @@ namespace BurstGridSearch
             if (_positions.Length == 0)
             {
                 throw new Exception("Empty position buffer");
-            }            
-            
-            NativeList<int2> cellStartEnd = new (Allocator.Persistent);
+            }
+
+            _cellStartEnd.Clear();
             _minMaxPositions = new (2, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             _gridDimensions = new (1, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             
@@ -70,7 +72,8 @@ namespace BurstGridSearch
                 Positions = _positions,
                 GridResolution = _gridResolution,
                 TargetGridSize = _targetGridSize,
-                CellStartEnd = cellStartEnd,
+                GridDimensions = _gridDimensions,
+                CellStartEnd = _cellStartEnd,
                 MinMaxPositions = _minMaxPositions,
             };
             var handle = job.Schedule();
@@ -82,7 +85,7 @@ namespace BurstGridSearch
                 GridDimensions = _gridDimensions,
                 Positions = _positions,
                 HashIndex = _hashIndex,
-                CellCount = cellStartEnd.AsDeferredJobArray().Length,
+                CellCount = _cellStartEnd.AsDeferredJobArray().Length,
             };
             handle = assignHashJob.Schedule(_positions.Length, 128, handle);
             
@@ -110,25 +113,18 @@ namespace BurstGridSearch
             
             var memsetCellStartJob = new MemsetCellStartJob()
             {
-                CellStartEnd = cellStartEnd.AsDeferredJobArray()
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray()
             };
 
-            handle = memsetCellStartJob.Schedule(cellStartEnd, 256, handle);
+            handle = memsetCellStartJob.Schedule(_cellStartEnd, 256, handle);
             
             var sortCellJob = new SortCellJob()
             {
                 Positions = _positions,
                 HashIndex = _hashIndex,
-                CellStartEnd = cellStartEnd.AsDeferredJobArray(),
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
                 SortedPositions = _sortedPositions,
             };
-            
-            if (_cellStartEnd.IsCreated)
-            {
-                _cellStartEnd.Dispose();
-            }
-            
-            _cellStartEnd = cellStartEnd.AsDeferredJobArray();
             
             return sortCellJob.Schedule(handle);
         }
@@ -160,7 +156,7 @@ namespace BurstGridSearch
         {
             NativeArray<float3> qPoints = new NativeArray<Vector3>(queryPoints, Allocator.TempJob).Reinterpret<float3>();
             NativeArray<int> results = new NativeArray<int>(queryPoints.Length, Allocator.TempJob);
-
+            
             var closestPointJob = new ClosestPointJob()
             {
                 GridOrigin = _minMaxPositions,
@@ -169,19 +165,19 @@ namespace BurstGridSearch
                 QueryPositions = qPoints,
                 SortedPositions = _sortedPositions,
                 HashIndex = _hashIndex,
-                CellStartEnd = _cellStartEnd,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
                 Results = results,
                 IgnoreSelf = checkSelf,
                 SquaredepsilonSelf = epsilon * epsilon,
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
+            int[] res = new int[qPoints.Length];
+            
+            qPoints.Dispose(closestPointJobHandle);
             closestPointJobHandle.Complete();
 
-            int[] res = new int[qPoints.Length];
             results.CopyTo(res);
-
-            qPoints.Dispose();
             results.Dispose();
 
             return res;
@@ -199,7 +195,7 @@ namespace BurstGridSearch
                 QueryPositions = qPoints,
                 SortedPositions = _sortedPositions,
                 HashIndex = _hashIndex,
-                CellStartEnd = _cellStartEnd,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
                 Results = results,
                 IgnoreSelf = checkSelf,
                 SquaredepsilonSelf = epsilon * epsilon,
@@ -228,19 +224,17 @@ namespace BurstGridSearch
                 QueryPositions = qPoints,
                 SortedPositions = _sortedPositions,
                 HashIndex = _hashIndex,
-                CellStartEnd = _cellStartEnd,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
                 Results = results
             };
 
             var withinJobHandle = withinJob.Schedule(qPoints.Length, 16);
+            qPoints.Dispose(withinJobHandle);
             withinJobHandle.Complete();
 
             int[] res = new int[results.Length];
             results.CopyTo(res);
-
-            qPoints.Dispose();
             results.Dispose();
-
             return res;
         }
 
@@ -261,7 +255,7 @@ namespace BurstGridSearch
                 QueryPositions = queryPoints,
                 SortedPositions = _sortedPositions,
                 HashIndex = _hashIndex,
-                CellStartEnd = _cellStartEnd,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
                 Results = results
             };
 
@@ -294,6 +288,7 @@ namespace BurstGridSearch
             [ReadOnly] public int TargetGridSize;
             public NativeArray<float3> MinMaxPositions;
             public NativeList<int2> CellStartEnd;
+            public NativeArray<int3> GridDimensions;
             public float GridResolution;
 
             void IJob.Execute()
@@ -334,7 +329,7 @@ namespace BurstGridSearch
                 int cellCount = gridDimension.x * gridDimension.y * gridDimension.z;
                 
                 CellStartEnd.ResizeUninitialized(cellCount);
-
+                GridDimensions[0] = gridDimension;
                 MinMaxPositions[0] = minPosition;
                 MinMaxPositions[1] = maxPosition;
             }
@@ -451,8 +446,9 @@ namespace BurstGridSearch
                 float3 p = QueryPositions[index];
 
                 float3 origin = GridOrigin[0];
+                int3 dimensions = GridDimensions[0];
                 int3 cell = SpaceToGrid(p, origin, GridResolutionInv);
-                cell = math.clamp(cell, new int3(0, 0, 0), GridDimensions[0] - new int3(1, 1, 1));
+                cell = math.clamp(cell, int3.zero, dimensions - new int3(1, 1, 1));
 
                 float minD = float.MaxValue;
                 int3 curGridId;
@@ -461,20 +457,21 @@ namespace BurstGridSearch
                 for (int x = -1; x <= 1; x++)
                 {
                     curGridId.x = cell.x + x;
-                    if (curGridId.x >= 0 && curGridId.x < GridDimensions[0].x)
+                    if (curGridId.x >= 0 && curGridId.x < dimensions.x)
                     {
                         for (int y = -1; y <= 1; y++)
                         {
                             curGridId.y = cell.y + y;
-                            if (curGridId.y >= 0 && curGridId.y < GridDimensions[0].y)
+                            if (curGridId.y >= 0 && curGridId.y < dimensions.y)
                             {
                                 for (int z = -1; z <= 1; z++)
                                 {
                                     curGridId.z = cell.z + z;
-                                    if (curGridId.z >= 0 && curGridId.z < GridDimensions[0].z)
+                                    if (curGridId.z >= 0 && curGridId.z < dimensions.z)
                                     {
 
-                                        int neighcellhash = Flatten3DTo1D(curGridId, GridDimensions[0]);
+                                        int neighcellhash = Flatten3DTo1D(curGridId, dimensions);
+                                        
                                         int idStart = CellStartEnd[neighcellhash].x;
                                         int idStop = CellStartEnd[neighcellhash].y;
 
@@ -516,13 +513,17 @@ namespace BurstGridSearch
                     Results[index] = HashIndex[minRes].y;
                 }
                 else
-                {//Neighbor cells do not contain anything => compute all distances
-                 //Compute all the distances ! = SLOW
+                {
+                    return;
+                    //Neighbor cells do not contain anything => compute all distances
+                    //Compute all the distances = SLOW
+                    // TODO: Improve this by progressively looping over outter layers or a growing cube
+                    // TODO: This can also be done in another IJobParallel
                     for (int id = 0; id < SortedPositions.Length; id++)
                     {
 
                         float3 posA = SortedPositions[id];
-                        float d = math.distancesq(p, posA); //Squared distance
+                        float d = math.distancesq(p, posA);
 
                         if (d < minD)
                         {
