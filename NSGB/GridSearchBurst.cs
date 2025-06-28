@@ -68,6 +68,9 @@ namespace BurstGridSearch
                 throw new Exception("Empty position buffer");
             }
             
+            if (_minMaxPositions.IsCreated) _minMaxPositions.Dispose();
+            if (_gridDimensions.IsCreated) _gridDimensions.Dispose();
+            
             _minMaxPositions = new (2, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             _gridDimensions = new (1, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             
