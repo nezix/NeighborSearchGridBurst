@@ -514,7 +514,6 @@ namespace BurstGridSearch
                 }
                 else
                 {
-                    return;
                     //Neighbor cells do not contain anything => compute all distances
                     //Compute all the distances = SLOW
                     // TODO: Improve this by progressively looping over outter layers or a growing cube
