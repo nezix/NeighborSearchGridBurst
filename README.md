@@ -2,7 +2,7 @@
 ---------------
 
 ## This is a fast, parallel (C# job system) and vectorized (Burst compiled) code for Unity for k-neighbor search.
-For some data, it can be faster than using a KDtree (can be 25 times faster than fast KDTree KNN from https://github.com/ArthurBrussee/KNN.
+For some data, it can be faster than using a KDtree (can be 25 times faster than KNN from https://github.com/ArthurBrussee/KNN.
 
 #### Best case scenario: uniformly distributed points in space
 #### Worst case scenario: nearly all points close to each others and some points far from the cluster
@@ -37,15 +37,15 @@ Example cases:
   //If gridReso < 0, the resolution will be adjusted so that the grid is 32 x 32 x 32 (this can be changed by doing: new GridSearchBurst(-1.0f, 64);)
   GridSearchBurst gsb = new GridSearchBurst(gridReso);
   
-  gsb.initGrid(positions);
+  gsb.initGrid(positions).Complete();
   //For each query point, find the closest point
-  int[] results = gsb.searchClosestPoint(queries);
+  int[] results = gsb.SearchClosestPoint(queries);
  
    //For each query point, find the closest point that is not exactly the same 
-  int[] results2 = gsb.searchClosestPoint(queries, checkSelf: true, epsilon: 0.001f);
+  int[] results2 = gsb.SearchClosestPoint(queries, checkSelf: true, epsilon: 0.001f);
   
   //For each query point, find neighbor points in a radius of 2 (only 50 points are searched)
-  int[] results3 = gsb.searchWithin(queries, 2.0f, 50);
+  int[] results3 = gsb.SearchWithin(queries, 2.0f, 50);
   //Result array contains 50 x len(queries) indices in positions array
   
   //Print the position of the closest point to the first query point
@@ -53,7 +53,7 @@ Example cases:
     Debug.Log(positions[results[0]);
   
   
-  gsb.clean();//Free up the native arrays !
+  gsb.Dispose();//Free up the native arrays !
   
 ```
 
