@@ -37,7 +37,7 @@ Example cases:
   //If gridReso < 0, the resolution will be adjusted so that the grid is 32 x 32 x 32 (this can be changed by doing: new GridSearchBurst(-1.0f, 64);)
   GridSearchBurst gsb = new GridSearchBurst(gridReso);
   
-  gsb.initGrid(positions).Complete();
+  gsb.InitializeGrid(positions).Complete();
   //For each query point, find the closest point
   int[] results = gsb.SearchClosestPoint(queries);
  
