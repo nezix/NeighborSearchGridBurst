@@ -67,8 +67,7 @@ namespace BurstGridSearch
             {
                 throw new Exception("Empty position buffer");
             }
-
-            _cellStartEnd.Clear();
+            
             _minMaxPositions = new (2, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             _gridDimensions = new (1, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             
@@ -90,7 +89,7 @@ namespace BurstGridSearch
                 GridDimensions = _gridDimensions,
                 Positions = _positions,
                 HashIndex = _hashIndex,
-                CellCount = _cellStartEnd.AsDeferredJobArray().Length,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
             };
             handle = assignHashJob.Schedule(_positions.Length, 128, handle);
             
@@ -170,7 +169,7 @@ namespace BurstGridSearch
                 QueryPositions = qPoints,
                 SortedPositions = _sortedPositions,
                 HashIndex = _hashIndex,
-                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
+                CellStartEnd = _cellStartEnd.AsArray(),
                 Results = results,
                 IgnoreSelf = checkSelf,
                 SquaredepsilonSelf = epsilon * epsilon,
@@ -335,7 +334,7 @@ namespace BurstGridSearch
                 
                 int cellCount = gridDimension.x * gridDimension.y * gridDimension.z;
                 
-                CellStartEnd.ResizeUninitialized(cellCount);
+                CellStartEnd.Resize(cellCount, NativeArrayOptions.ClearMemory);
                 GridDimensions[0] = gridDimension;
                 MinMaxPositions[0] = minPosition;
                 MinMaxPositions[1] = maxPosition;
@@ -348,7 +347,7 @@ namespace BurstGridSearch
             [ReadOnly] public NativeArray<float3> GridOrigin;
             [ReadOnly] public NativeArray<float> GridResolution;
             [ReadOnly] public NativeArray<int3> GridDimensions;
-            [ReadOnly] public int CellCount;
+            [ReadOnly] public NativeArray<int2> CellStartEnd;
             [ReadOnly] public NativeArray<float3> Positions;
 
             public NativeArray<int2> HashIndex;
@@ -362,7 +361,7 @@ namespace BurstGridSearch
                 int3 cell = SpaceToGrid(p, origin, invGridResolution);
                 cell = math.clamp(cell, new int3(0, 0, 0), dim - new int3(1, 1, 1));
                 int hash = Flatten3DTo1D(cell, dim);
-                hash = math.clamp(hash, 0, CellCount - 1);
+                hash = math.clamp(hash, 0, CellStartEnd.Length - 1);
 
                 HashIndex[index] = new (hash, index);
             }
