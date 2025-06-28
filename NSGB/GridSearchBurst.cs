@@ -11,7 +11,6 @@ namespace BurstGridSearch
     public class GridSearchBurst : IDisposable
     {
         private const int MAXGRIDSIZE = 256;
-        private float _gridResolution = -1.0f;
         private int _targetGridSize;
 
         private NativeArray<float3> _positions;
@@ -20,6 +19,8 @@ namespace BurstGridSearch
         private NativeList<int2> _cellStartEnd;
         private NativeArray<float3> _minMaxPositions;
         private NativeArray<int3> _gridDimensions;
+        private NativeArray<float> _gridResolution;
+        private float _resolution;
         
         public GridSearchBurst(float resolution, int targetGrid = 32)
         {
@@ -32,12 +33,14 @@ namespace BurstGridSearch
             {
                 throw new Exception("Wrong target grid size. Choose a resolution > 0 or a target grid > 0");
             }
-            _gridResolution = resolution;
+            _resolution = resolution;
         }
 
         public JobHandle InitializeGrid(NativeArray<float3> positions)
         {
             Dispose();
+            _gridResolution = new NativeArray<float>(1, Allocator.Persistent);
+            _gridResolution[0] = _resolution;
             _positions = new NativeArray<float3>(positions.Length, Allocator.Persistent);
             _hashIndex = new (positions.Length, Allocator.Persistent);
             _sortedPositions = new (positions.Length, Allocator.Persistent);
@@ -49,6 +52,8 @@ namespace BurstGridSearch
         public JobHandle InitializeGrid(Vector3[] positions)
         {
             Dispose();
+            _gridResolution = new NativeArray<float>(1, Allocator.Persistent);
+            _gridResolution[0] = _resolution;
             _positions = new NativeArray<Vector3>(positions, Allocator.Persistent).Reinterpret<float3>();
             _hashIndex = new (positions.Length, Allocator.Persistent);
             _sortedPositions = new (positions.Length, Allocator.Persistent);
@@ -81,7 +86,7 @@ namespace BurstGridSearch
             var assignHashJob = new AssignHashJob()
             {
                 GridOrigin = _minMaxPositions,
-                GridResolutionInv = 1.0f / _gridResolution,
+                GridResolution = _gridResolution,
                 GridDimensions = _gridDimensions,
                 Positions = _positions,
                 HashIndex = _hashIndex,
@@ -160,7 +165,7 @@ namespace BurstGridSearch
             var closestPointJob = new ClosestPointJob()
             {
                 GridOrigin = _minMaxPositions,
-                GridResolutionInv = 1.0f / _gridResolution,
+                GridResolutionInv = 1.0f / _gridResolution[0],
                 GridDimensions = _gridDimensions,
                 QueryPositions = qPoints,
                 SortedPositions = _sortedPositions,
@@ -190,7 +195,7 @@ namespace BurstGridSearch
             var closestPointJob = new ClosestPointJob()
             {
                 GridOrigin = _minMaxPositions,
-                GridResolutionInv = 1.0f / _gridResolution,
+                GridResolutionInv = 1.0f / _gridResolution[0],
                 GridDimensions = _gridDimensions,
                 QueryPositions = qPoints,
                 SortedPositions = _sortedPositions,
@@ -211,7 +216,7 @@ namespace BurstGridSearch
         {
             NativeArray<float3> qPoints = new NativeArray<Vector3>(queryPoints, Allocator.TempJob).Reinterpret<float3>();
             NativeArray<int> results = new NativeArray<int>(queryPoints.Length * maxNeighborPerQuery, Allocator.TempJob);
-            int cellsToLoop = (int)math.ceil(rad / _gridResolution);
+            int cellsToLoop = (int)math.ceil(rad / _gridResolution[0]);
 
             var withinJob = new FindWithinJob()
             {
@@ -219,7 +224,7 @@ namespace BurstGridSearch
                 MaxNeighbor = maxNeighborPerQuery,
                 CellsToLoop = cellsToLoop,
                 GridOrigin = _minMaxPositions,
-                invresoGrid = 1.0f / _gridResolution,
+                invresoGrid = 1.0f / _gridResolution[0],
                 GridDimensions = _gridDimensions,
                 QueryPositions = qPoints,
                 SortedPositions = _sortedPositions,
@@ -242,7 +247,7 @@ namespace BurstGridSearch
         {
             NativeArray<int> results = new NativeArray<int>(queryPoints.Length * maxNeighborPerQuery, Allocator.TempJob);
 
-            int cellsToLoop = (int)math.ceil(rad / _gridResolution);
+            int cellsToLoop = (int)math.ceil(rad / _gridResolution[0]);
 
             var withinJob = new FindWithinJob()
             {
@@ -250,7 +255,7 @@ namespace BurstGridSearch
                 MaxNeighbor = maxNeighborPerQuery,
                 CellsToLoop = cellsToLoop,
                 GridOrigin = _minMaxPositions,
-                invresoGrid = 1.0f / _gridResolution,
+                invresoGrid = 1.0f / _gridResolution[0],
                 GridDimensions = _gridDimensions,
                 QueryPositions = queryPoints,
                 SortedPositions = _sortedPositions,
@@ -279,6 +284,8 @@ namespace BurstGridSearch
                 _minMaxPositions.Dispose();
             if (_gridDimensions.IsCreated)
                 _gridDimensions.Dispose();
+            if (_gridResolution.IsCreated)
+                _gridResolution.Dispose();
         }
         
         [BurstCompile(CompileSynchronously = true)]
@@ -289,7 +296,7 @@ namespace BurstGridSearch
             public NativeArray<float3> MinMaxPositions;
             public NativeList<int2> CellStartEnd;
             public NativeArray<int3> GridDimensions;
-            public float GridResolution;
+            public NativeArray<float> GridResolution;
 
             void IJob.Execute()
             {
@@ -309,16 +316,16 @@ namespace BurstGridSearch
                     maxPosition = new float3(x, y, z);
                 }
                 
-                float3 sideLength = minPosition - maxPosition;
+                float3 sideLength = maxPosition - minPosition;
                 float maxDist = math.max(sideLength.x, math.max(sideLength.y, sideLength.z));
                 
                 //Compute a resolution so that the grid is equal to 32*32*32 cells
-                if (GridResolution <= 0.0f)
+                if (GridResolution[0] <= 0.0f)
                 {
-                    GridResolution = maxDist / (float)TargetGridSize;
+                    GridResolution[0] = maxDist / TargetGridSize;
                 }
                 
-                int gridSize = math.max(1, (int)math.ceil(maxDist / GridResolution));
+                int gridSize = math.max(1, (int)math.ceil(maxDist / GridResolution[0]));
                 int3 gridDimension = new int3(gridSize, gridSize, gridSize);
                 
                 if (gridSize > MAXGRIDSIZE)
@@ -339,7 +346,7 @@ namespace BurstGridSearch
         struct AssignHashJob : IJobParallelFor
         {
             [ReadOnly] public NativeArray<float3> GridOrigin;
-            [ReadOnly] public float GridResolutionInv;
+            [ReadOnly] public NativeArray<float> GridResolution;
             [ReadOnly] public NativeArray<int3> GridDimensions;
             [ReadOnly] public int CellCount;
             [ReadOnly] public NativeArray<float3> Positions;
@@ -351,7 +358,8 @@ namespace BurstGridSearch
                 int3 dim = GridDimensions[0];
                 float3 origin = GridOrigin[0];
                 float3 p = Positions[index];
-                int3 cell = SpaceToGrid(p, origin, GridResolutionInv);
+                float invGridResolution = 1.0f / GridResolution[0];
+                int3 cell = SpaceToGrid(p, origin, invGridResolution);
                 cell = math.clamp(cell, new int3(0, 0, 0), dim - new int3(1, 1, 1));
                 int hash = Flatten3DTo1D(cell, dim);
                 hash = math.clamp(hash, 0, CellCount - 1);
