@@ -1,329 +1,204 @@
 using System;
-using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
-
-//Multithreaded sort from https://coffeebraingames.wordpress.com/2020/06/07/a-multithreaded-sorting-attempt/
+using Exception = System.Exception;
 
 namespace BurstGridSearch
 {
-
-    public class GridSearchBurst
+    public class GridSearchBurst : IDisposable
     {
-        const int MAXGRIDSIZE = 256;
+        private const int MAXGRIDSIZE = 256;
+        private float _gridResolution = -1.0f;
+        private int _targetGridSize;
 
-        NativeArray<float3> positions;
-        NativeArray<float3> sortedPos;
-        NativeArray<int2> hashIndex;
-        NativeArray<int2> cellStartEnd;
-
-        float3 minValue = float3.zero;
-        float3 maxValue = float3.zero;
-        int3 gridDim = int3.zero;
-
-        float gridReso = -1.0f;
-        int targetGridSize;
-
+        private NativeArray<float3> _positions;
+        private NativeArray<float3> _sortedPositions;
+        private NativeArray<int2> _hashIndex;
+        private NativeList<int2> _cellStartEnd;
+        private NativeArray<float3> _minMaxPositions;
+        private NativeArray<int3> _gridDimensions;
+        
         public GridSearchBurst(float resolution, int targetGrid = 32)
         {
             if (resolution <= 0.0f && targetGrid > 0)
             {
-                targetGridSize = targetGrid;
+                _targetGridSize = targetGrid;
                 return;
             }
-            else if (resolution <= 0.0f && targetGrid <= 0)
+            if (resolution <= 0.0f && targetGrid <= 0)
             {
-                throw new System.Exception("Wrong target grid size. Choose a resolution > 0 or a target grid > 0");
+                throw new Exception("Wrong target grid size. Choose a resolution > 0 or a target grid > 0");
             }
-            gridReso = resolution;
+            _gridResolution = resolution;
         }
 
-        public void initGrid(Vector3[] pos)
+        public JobHandle InitializeGrid(NativeArray<float3> positions)
         {
-
-            positions = new NativeArray<Vector3>(pos, Allocator.Persistent).Reinterpret<float3>();
-
-            _initGrid();
+            Dispose();
+            _positions = new NativeArray<float3>(positions.Length, Allocator.Persistent);
+            _hashIndex = new (positions.Length, Allocator.Persistent);
+            _sortedPositions = new (positions.Length, Allocator.Persistent);
+            _cellStartEnd = new (Allocator.Persistent);
+            positions.CopyTo(_positions);
+            return InitializeGridInternal();
         }
-
-        public void initGrid(NativeArray<float3> pos)
+        
+        public JobHandle InitializeGrid(Vector3[] positions)
         {
-
-            positions = new NativeArray<float3>(pos.Length, Allocator.Persistent);
-            pos.CopyTo(positions);
-
-            _initGrid();
+            Dispose();
+            _positions = new NativeArray<Vector3>(positions, Allocator.Persistent).Reinterpret<float3>();
+            _hashIndex = new (positions.Length, Allocator.Persistent);
+            _sortedPositions = new (positions.Length, Allocator.Persistent);
+            _cellStartEnd = new (Allocator.Persistent);
+            return InitializeGridInternal();
         }
-
-        private void _initGrid()
+        
+        private JobHandle InitializeGridInternal()
         {
-            if (positions.Length == 0)
+            if (_positions.Length == 0)
             {
-                throw new System.Exception("Empty position buffer");
-            }
-            getMinMaxCoords(positions, ref minValue, ref maxValue);
-
-            float3 sidelen = maxValue - minValue;
-            float maxDist = math.max(sidelen.x, math.max(sidelen.y, sidelen.z));
-
-            //Compute a resolution so that the grid is equal to 32*32*32 cells
-            if (gridReso <= 0.0f)
-            {
-                gridReso = maxDist / (float)targetGridSize;
+                throw new Exception("Empty position buffer");
             }
 
-            int gridSize = math.max(1, (int)math.ceil(maxDist / gridReso));
-            gridDim = new int3(gridSize, gridSize, gridSize);
-
-            if (gridSize > MAXGRIDSIZE)
+            _cellStartEnd.Clear();
+            _minMaxPositions = new (2, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            _gridDimensions = new (1, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            
+            var job = new GridInializationJob()
             {
-                throw new System.Exception("Grid is too large, adjust the resolution");
-            }
-
-            int NCells = gridDim.x * gridDim.y * gridDim.z;
-
-            hashIndex = new NativeArray<int2>(positions.Length, Allocator.Persistent);
-            sortedPos = new NativeArray<float3>(positions.Length, Allocator.Persistent);
-            cellStartEnd = new NativeArray<int2>(NCells, Allocator.Persistent);
+                Positions = _positions,
+                GridResolution = _gridResolution,
+                TargetGridSize = _targetGridSize,
+                GridDimensions = _gridDimensions,
+                CellStartEnd = _cellStartEnd,
+                MinMaxPositions = _minMaxPositions,
+            };
+            var handle = job.Schedule();
 
             var assignHashJob = new AssignHashJob()
             {
-                oriGrid = minValue,
-                invresoGrid = 1.0f / gridReso,
-                gridDim = gridDim,
-                pos = positions,
-                nbcells = NCells,
-                hashIndex = hashIndex
+                GridOrigin = _minMaxPositions,
+                GridResolutionInv = 1.0f / _gridResolution,
+                GridDimensions = _gridDimensions,
+                Positions = _positions,
+                HashIndex = _hashIndex,
+                CellCount = _cellStartEnd.AsDeferredJobArray().Length,
             };
-            var assignHashJobHandle = assignHashJob.Schedule(positions.Length, 128);
-            assignHashJobHandle.Complete();
-
-            NativeArray<SortEntry> entries = new NativeArray<SortEntry>(positions.Length, Allocator.TempJob);
-
+            handle = assignHashJob.Schedule(_positions.Length, 128, handle);
+            
+            NativeArray<SortEntry> entries = new NativeArray<SortEntry>(_positions.Length, Allocator.TempJob);
+            
             var populateJob = new PopulateEntryJob()
             {
-                hashIndex = hashIndex,
-                entries = entries
-
+                HashIndex = _hashIndex,
+                Entries = entries
             };
-            var populateJobHandle = populateJob.Schedule(positions.Length, 128);
-            populateJobHandle.Complete();
-
-
-            // --- Here we could create a list for each filled cell of the grid instead of allocating the whole grid ---
-            // hashIndex.Sort(new int2Comparer());//Sort by hash SUPER SLOW !
-
+            
+            handle = populateJob.Schedule(_positions.Length, 128, handle);
+            
             // ------- Sort by hash
-
-            JobHandle handle1 = new JobHandle();
-            JobHandle chainHandle = MultithreadedSort.Sort(entries, handle1);
-            chainHandle.Complete();
-            handle1.Complete();
-
+            handle = MultithreadedSort.Sort(entries, handle);
+            
             var depopulateJob = new DePopulateEntryJob()
             {
-                hashIndex = hashIndex,
-                entries = entries
+                HashIndex = _hashIndex,
+                Entries = entries
             };
 
-            var depopulateJobHandle = depopulateJob.Schedule(positions.Length, 128);
-            depopulateJobHandle.Complete();
-
-            entries.Dispose();
-
-            // ------- Sort (end)
-
+            handle = depopulateJob.Schedule(_positions.Length, 128, handle);
+            entries.Dispose(handle);
+            
             var memsetCellStartJob = new MemsetCellStartJob()
             {
-                cellStartEnd = cellStartEnd
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray()
             };
-            var memsetCellStartJobHandle = memsetCellStartJob.Schedule(NCells, 256);
-            memsetCellStartJobHandle.Complete();
 
+            handle = memsetCellStartJob.Schedule(_cellStartEnd, 256, handle);
+            
             var sortCellJob = new SortCellJob()
             {
-                pos = positions,
-                hashIndex = hashIndex,
-                cellStartEnd = cellStartEnd,
-                sortedPos = sortedPos
+                Positions = _positions,
+                HashIndex = _hashIndex,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
+                SortedPositions = _sortedPositions,
             };
-
-
-            var sortCellJobHandle = sortCellJob.Schedule();
-            sortCellJobHandle.Complete();
+            
+            return sortCellJob.Schedule(handle);
+        }
+       
+        public JobHandle UpdatePositions(Vector3[] newPositions)
+        {
+            NativeArray<float3> tempPositions = new NativeArray<Vector3>(newPositions, Allocator.TempJob).Reinterpret<float3>();
+            var updateHandle = UpdatePositionsInternal(tempPositions);
+            tempPositions.Dispose(updateHandle);
+            return updateHandle;
         }
 
-
-        public void clean()
+        public JobHandle UpdatePositions(NativeArray<float3> newPositions)
         {
-            if (positions.IsCreated)
-                positions.Dispose();
-            if (hashIndex.IsCreated)
-                hashIndex.Dispose();
-            if (cellStartEnd.IsCreated)
-                cellStartEnd.Dispose();
-            if (sortedPos.IsCreated)
-                sortedPos.Dispose();
+            return UpdatePositionsInternal(newPositions);
         }
-
-        public void updatePositions(Vector3[] newPos)
+        
+        private JobHandle UpdatePositionsInternal(NativeArray<float3> newPositions)
         {
-            NativeArray<float3> tempPositions = new NativeArray<Vector3>(newPos, Allocator.TempJob).Reinterpret<float3>();
-            updatePositions(tempPositions);
-            tempPositions.Dispose();
-        }
-
-        ///Update the grid with new positions -> avoid allocating memory if not needed
-        public void updatePositions(NativeArray<float3> newPos)
-        {
-            if (newPos.Length != positions.Length)
+            if (_positions.Length != newPositions.Length)
             {
-                return;
+                throw new Exception("Arrays are not the same length");
             }
-
-            newPos.CopyTo(positions);
-
-            getMinMaxCoords(positions, ref minValue, ref maxValue);
-
-            float3 sidelen = maxValue - minValue;
-            float maxDist = math.max(sidelen.x, math.max(sidelen.y, sidelen.z));
-
-            int gridSize = (int)math.ceil(maxDist / gridReso);
-            gridDim = new int3(gridSize, gridSize, gridSize);
-
-            if (gridSize > MAXGRIDSIZE)
-            {
-                throw new System.Exception("Grid is to large, adjust the resolution");
-            }
-
-            int NCells = gridDim.x * gridDim.y * gridDim.z;
-
-            if (NCells != cellStartEnd.Length)
-            {
-                cellStartEnd.Dispose();
-                cellStartEnd = new NativeArray<int2>(NCells, Allocator.Persistent);
-            }
-            var assignHashJob = new AssignHashJob()
-            {
-                oriGrid = minValue,
-                invresoGrid = 1.0f / gridReso,
-                gridDim = gridDim,
-                pos = positions,
-                nbcells = NCells,
-                hashIndex = hashIndex
-            };
-            var assignHashJobHandle = assignHashJob.Schedule(positions.Length, 128);
-            assignHashJobHandle.Complete();
-
-
-            NativeArray<SortEntry> entries = new NativeArray<SortEntry>(positions.Length, Allocator.TempJob);
-
-            var populateJob = new PopulateEntryJob()
-            {
-                hashIndex = hashIndex,
-                entries = entries
-
-            };
-            var populateJobHandle = populateJob.Schedule(positions.Length, 128);
-            populateJobHandle.Complete();
-
-
-            // --- Here we could create a list for each filled cell of the grid instead of allocating the whole grid ---
-            // hashIndex.Sort(new int2Comparer());//Sort by hash SUPER SLOW !
-
-            // ------- Sort by hash
-
-            JobHandle handle1 = new JobHandle();
-            JobHandle chainHandle = MultithreadedSort.Sort(entries, handle1);
-            chainHandle.Complete();
-            handle1.Complete();
-
-            var depopulateJob = new DePopulateEntryJob()
-            {
-                hashIndex = hashIndex,
-                entries = entries
-
-            };
-
-            var depopulateJobHandle = depopulateJob.Schedule(positions.Length, 128);
-            depopulateJobHandle.Complete();
-
-            entries.Dispose();
-
-            // ------- Sort (end)
-
-            var memsetCellStartJob = new MemsetCellStartJob()
-            {
-                cellStartEnd = cellStartEnd
-            };
-            var memsetCellStartJobHandle = memsetCellStartJob.Schedule(NCells, 256);
-            memsetCellStartJobHandle.Complete();
-
-            var sortCellJob = new SortCellJob()
-            {
-                pos = positions,
-                hashIndex = hashIndex,
-                cellStartEnd = cellStartEnd,
-                sortedPos = sortedPos
-            };
-
-            var sortCellJobHandle = sortCellJob.Schedule();
-            sortCellJobHandle.Complete();
+            newPositions.CopyTo(_positions);
+            return InitializeGridInternal();
         }
-
-        public int[] searchClosestPoint(Vector3[] queryPoints, bool checkSelf = false, float epsilon = 0.001f)
+        
+        public int[] SearchClosestPoint(Vector3[] queryPoints, bool checkSelf = false, float epsilon = 0.001f)
         {
-
             NativeArray<float3> qPoints = new NativeArray<Vector3>(queryPoints, Allocator.TempJob).Reinterpret<float3>();
             NativeArray<int> results = new NativeArray<int>(queryPoints.Length, Allocator.TempJob);
-
+            
             var closestPointJob = new ClosestPointJob()
             {
-                oriGrid = minValue,
-                invresoGrid = 1.0f / gridReso,
-                gridDim = gridDim,
-                queryPos = qPoints,
-                sortedPos = sortedPos,
-                hashIndex = hashIndex,
-                cellStartEnd = cellStartEnd,
-                results = results,
-                ignoreSelf = checkSelf,
-                squaredepsilonSelf = epsilon * epsilon,
+                GridOrigin = _minMaxPositions,
+                GridResolutionInv = 1.0f / _gridResolution,
+                GridDimensions = _gridDimensions,
+                QueryPositions = qPoints,
+                SortedPositions = _sortedPositions,
+                HashIndex = _hashIndex,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
+                Results = results,
+                IgnoreSelf = checkSelf,
+                SquaredepsilonSelf = epsilon * epsilon,
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
+            int[] res = new int[qPoints.Length];
+            
+            qPoints.Dispose(closestPointJobHandle);
             closestPointJobHandle.Complete();
 
-            int[] res = new int[qPoints.Length];
             results.CopyTo(res);
-
-            qPoints.Dispose();
             results.Dispose();
 
             return res;
         }
 
-        public NativeArray<int> searchClosestPoint(NativeArray<float3> qPoints, bool checkSelf = false, float epsilon = 0.001f)
+        public NativeArray<int> SearchClosestPoint(NativeArray<float3> qPoints, bool checkSelf = false, float epsilon = 0.001f)
         {
-
             NativeArray<int> results = new NativeArray<int>(qPoints.Length, Allocator.TempJob);
 
             var closestPointJob = new ClosestPointJob()
             {
-                oriGrid = minValue,
-                invresoGrid = 1.0f / gridReso,
-                gridDim = gridDim,
-                queryPos = qPoints,
-                sortedPos = sortedPos,
-                hashIndex = hashIndex,
-                cellStartEnd = cellStartEnd,
-                results = results,
-                ignoreSelf = checkSelf,
-                squaredepsilonSelf = epsilon * epsilon,
+                GridOrigin = _minMaxPositions,
+                GridResolutionInv = 1.0f / _gridResolution,
+                GridDimensions = _gridDimensions,
+                QueryPositions = qPoints,
+                SortedPositions = _sortedPositions,
+                HashIndex = _hashIndex,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
+                Results = results,
+                IgnoreSelf = checkSelf,
+                SquaredepsilonSelf = epsilon * epsilon,
             };
 
             var closestPointJobHandle = closestPointJob.Schedule(qPoints.Length, 16);
@@ -332,60 +207,56 @@ namespace BurstGridSearch
             return results;
         }
 
-        public int[] searchWithin(Vector3[] queryPoints, float rad, int maxNeighborPerQuery)
+        public int[] SearchWithin(Vector3[] queryPoints, float rad, int maxNeighborPerQuery)
         {
-
             NativeArray<float3> qPoints = new NativeArray<Vector3>(queryPoints, Allocator.TempJob).Reinterpret<float3>();
             NativeArray<int> results = new NativeArray<int>(queryPoints.Length * maxNeighborPerQuery, Allocator.TempJob);
-            int cellsToLoop = (int)math.ceil(rad / gridReso);
+            int cellsToLoop = (int)math.ceil(rad / _gridResolution);
 
             var withinJob = new FindWithinJob()
             {
-                squaredRadius = rad * rad,
-                maxNeighbor = maxNeighborPerQuery,
-                cellsToLoop = cellsToLoop,
-                oriGrid = minValue,
-                invresoGrid = 1.0f / gridReso,
-                gridDim = gridDim,
-                queryPos = qPoints,
-                sortedPos = sortedPos,
-                hashIndex = hashIndex,
-                cellStartEnd = cellStartEnd,
-                results = results
+                SquaredRadius = rad * rad,
+                MaxNeighbor = maxNeighborPerQuery,
+                CellsToLoop = cellsToLoop,
+                GridOrigin = _minMaxPositions,
+                invresoGrid = 1.0f / _gridResolution,
+                GridDimensions = _gridDimensions,
+                QueryPositions = qPoints,
+                SortedPositions = _sortedPositions,
+                HashIndex = _hashIndex,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
+                Results = results
             };
 
             var withinJobHandle = withinJob.Schedule(qPoints.Length, 16);
+            qPoints.Dispose(withinJobHandle);
             withinJobHandle.Complete();
 
             int[] res = new int[results.Length];
             results.CopyTo(res);
-
-            qPoints.Dispose();
             results.Dispose();
-
             return res;
         }
 
-        public NativeArray<int> searchWithin(NativeArray<float3> queryPoints, float rad, int maxNeighborPerQuery)
+        public NativeArray<int> SearchWithin(NativeArray<float3> queryPoints, float rad, int maxNeighborPerQuery)
         {
-
             NativeArray<int> results = new NativeArray<int>(queryPoints.Length * maxNeighborPerQuery, Allocator.TempJob);
 
-            int cellsToLoop = (int)math.ceil(rad / gridReso);
+            int cellsToLoop = (int)math.ceil(rad / _gridResolution);
 
             var withinJob = new FindWithinJob()
             {
-                squaredRadius = rad * rad,
-                maxNeighbor = maxNeighborPerQuery,
-                cellsToLoop = cellsToLoop,
-                oriGrid = minValue,
-                invresoGrid = 1.0f / gridReso,
-                gridDim = gridDim,
-                queryPos = queryPoints,
-                sortedPos = sortedPos,
-                hashIndex = hashIndex,
-                cellStartEnd = cellStartEnd,
-                results = results
+                SquaredRadius = rad * rad,
+                MaxNeighbor = maxNeighborPerQuery,
+                CellsToLoop = cellsToLoop,
+                GridOrigin = _minMaxPositions,
+                invresoGrid = 1.0f / _gridResolution,
+                GridDimensions = _gridDimensions,
+                QueryPositions = queryPoints,
+                SortedPositions = _sortedPositions,
+                HashIndex = _hashIndex,
+                CellStartEnd = _cellStartEnd.AsDeferredJobArray(),
+                Results = results
             };
 
             var withinJobHandle = withinJob.Schedule(queryPoints.Length, 16);
@@ -393,176 +264,191 @@ namespace BurstGridSearch
 
             return results;
         }
-
-        //---------------------------------------------
-
-        void getMinMaxCoords(NativeArray<float3> mpos, ref float3 minV, ref float3 maxV)
+        
+        public void Dispose()
         {
-            NativeArray<float3> tmpmin = new NativeArray<float3>(1, Allocator.TempJob);
-            NativeArray<float3> tmpmax = new NativeArray<float3>(1, Allocator.TempJob);
-            var mmJob = new getminmaxJob()
-            {
-                minVal = tmpmin,
-                maxVal = tmpmax,
-                pos = mpos
-            };
-            var mmJobHandle = mmJob.Schedule(mpos.Length, new JobHandle());
-            mmJobHandle.Complete();
-            minV = tmpmin[0];
-            maxV = tmpmax[0];
-            tmpmin.Dispose();
-            tmpmax.Dispose();
+            if (_positions.IsCreated)
+                _positions.Dispose();
+            if (_hashIndex.IsCreated)
+                _hashIndex.Dispose();
+            if (_cellStartEnd.IsCreated)
+                _cellStartEnd.Dispose();
+            if (_sortedPositions.IsCreated)
+                _sortedPositions.Dispose();
+            if (_minMaxPositions.IsCreated)
+                _minMaxPositions.Dispose();
+            if (_gridDimensions.IsCreated)
+                _gridDimensions.Dispose();
         }
-
-
+        
         [BurstCompile(CompileSynchronously = true)]
-        struct getminmaxJob : IJobFor
+        struct GridInializationJob : IJob
         {
-            public NativeArray<float3> minVal;
-            public NativeArray<float3> maxVal;
-            [ReadOnly] public NativeArray<float3> pos;
+            [ReadOnly] public NativeArray<float3> Positions;
+            [ReadOnly] public int TargetGridSize;
+            public NativeArray<float3> MinMaxPositions;
+            public NativeList<int2> CellStartEnd;
+            public NativeArray<int3> GridDimensions;
+            public float GridResolution;
 
-            void IJobFor.Execute(int i)
+            void IJob.Execute()
             {
+                int N = Positions.Length;
+                float3 minPosition = Positions[0];
+                float3 maxPosition = Positions[0];
                 float x, y, z;
-                if (i == 0)
+                for (int i = 0; i < N; ++i)
                 {
-                    minVal[0] = pos[0];
-                    maxVal[0] = pos[0];
+                    x = math.min(minPosition.x, Positions[i].x);
+                    y = math.min(minPosition.y, Positions[i].y);
+                    z = math.min(minPosition.z, Positions[i].z);
+                    minPosition = new float3(x, y, z);
+                    x = math.max(maxPosition.x, Positions[i].x);
+                    y = math.max(maxPosition.y, Positions[i].y);
+                    z = math.max(maxPosition.z, Positions[i].z);
+                    maxPosition = new float3(x, y, z);
                 }
-                else
+                
+                float3 sideLength = minPosition - maxPosition;
+                float maxDist = math.max(sideLength.x, math.max(sideLength.y, sideLength.z));
+                
+                //Compute a resolution so that the grid is equal to 32*32*32 cells
+                if (GridResolution <= 0.0f)
                 {
-
-                    x = math.min(minVal[0].x, pos[i].x);
-                    y = math.min(minVal[0].y, pos[i].y);
-                    z = math.min(minVal[0].z, pos[i].z);
-                    minVal[0] = new float3(x, y, z);
-                    x = math.max(maxVal[0].x, pos[i].x);
-                    y = math.max(maxVal[0].y, pos[i].y);
-                    z = math.max(maxVal[0].z, pos[i].z);
-                    maxVal[0] = new float3(x, y, z);
+                    GridResolution = maxDist / (float)TargetGridSize;
                 }
+                
+                int gridSize = math.max(1, (int)math.ceil(maxDist / GridResolution));
+                int3 gridDimension = new int3(gridSize, gridSize, gridSize);
+                
+                if (gridSize > MAXGRIDSIZE)
+                {
+                    throw new Exception("Grid is too large, adjust the resolution");
+                }
+                
+                int cellCount = gridDimension.x * gridDimension.y * gridDimension.z;
+                
+                CellStartEnd.ResizeUninitialized(cellCount);
+                GridDimensions[0] = gridDimension;
+                MinMaxPositions[0] = minPosition;
+                MinMaxPositions[1] = maxPosition;
             }
         }
-
+        
         [BurstCompile(CompileSynchronously = true)]
         struct AssignHashJob : IJobParallelFor
         {
-            [ReadOnly] public float3 oriGrid;
-            [ReadOnly] public float invresoGrid;
-            [ReadOnly] public int3 gridDim;
-            [ReadOnly] public int nbcells;
-            [ReadOnly] public NativeArray<float3> pos;
-            public NativeArray<int2> hashIndex;
+            [ReadOnly] public NativeArray<float3> GridOrigin;
+            [ReadOnly] public float GridResolutionInv;
+            [ReadOnly] public NativeArray<int3> GridDimensions;
+            [ReadOnly] public int CellCount;
+            [ReadOnly] public NativeArray<float3> Positions;
 
-            void IJobParallelFor.Execute(int index)
+            public NativeArray<int2> HashIndex;
+
+            public void Execute(int index)
             {
-                float3 p = pos[index];
+                int3 dim = GridDimensions[0];
+                float3 origin = GridOrigin[0];
+                float3 p = Positions[index];
+                int3 cell = SpaceToGrid(p, origin, GridResolutionInv);
+                cell = math.clamp(cell, new int3(0, 0, 0), dim - new int3(1, 1, 1));
+                int hash = Flatten3DTo1D(cell, dim);
+                hash = math.clamp(hash, 0, CellCount - 1);
 
-                int3 cell = spaceToGrid(p, oriGrid, invresoGrid);
-                cell = math.clamp(cell, new int3(0, 0, 0), gridDim - new int3(1, 1, 1));
-                int hash = flatten3DTo1D(cell, gridDim);
-                hash = math.clamp(hash, 0, nbcells - 1);
-
-                int2 v;
-                v.x = hash;
-                v.y = index;
-
-                hashIndex[index] = v;
+                HashIndex[index] = new (hash, index);
             }
         }
-
-
         [BurstCompile(CompileSynchronously = true)]
-        struct MemsetCellStartJob : IJobParallelFor
+        struct MemsetCellStartJob : IJobParallelForDefer
         {
-            public NativeArray<int2> cellStartEnd;
+            public NativeArray<int2> CellStartEnd;
 
-            void IJobParallelFor.Execute(int index)
+            void IJobParallelForDefer.Execute(int index)
             {
                 int2 v;
                 v.x = int.MaxValue - 1;
                 v.y = int.MaxValue - 1;
-                cellStartEnd[index] = v;
+                CellStartEnd[index] = v;
             }
         }
 
         [BurstCompile(CompileSynchronously = true)]
         struct SortCellJob : IJob
         {
+            [ReadOnly] public NativeArray<float3> Positions;
+            [ReadOnly] public NativeArray<int2> HashIndex;
 
-            [ReadOnly] public NativeArray<float3> pos;
-            [ReadOnly] public NativeArray<int2> hashIndex;
-
-            public NativeArray<int2> cellStartEnd;
-
-            public NativeArray<float3> sortedPos;
+            public NativeArray<int2> CellStartEnd;
+            public NativeArray<float3> SortedPositions;
 
             void IJob.Execute()
             {
-                for (int index = 0; index < hashIndex.Length; index++)
+                for (int index = 0; index < HashIndex.Length; index++)
                 {
-                    int hash = hashIndex[index].x;
-                    int id = hashIndex[index].y;
+                    int hash = HashIndex[index].x;
+                    int id = HashIndex[index].y;
                     int2 newV;
 
                     int hashm1 = -1;
                     if (index != 0)
-                        hashm1 = hashIndex[index - 1].x;
+                        hashm1 = HashIndex[index - 1].x;
 
 
                     if (index == 0 || hash != hashm1)
                     {
 
                         newV.x = index;
-                        newV.y = cellStartEnd[hash].y;
+                        newV.y = CellStartEnd[hash].y;
 
-                        cellStartEnd[hash] = newV; // set start
+                        CellStartEnd[hash] = newV; // set start
 
                         if (index != 0)
                         {
-                            newV.x = cellStartEnd[hashm1].x;
+                            newV.x = CellStartEnd[hashm1].x;
                             newV.y = index;
-                            cellStartEnd[hashm1] = newV; // set end
+                            CellStartEnd[hashm1] = newV; // set end
                         }
                     }
 
-                    if (index == pos.Length - 1)
+                    if (index == Positions.Length - 1)
                     {
-                        newV.x = cellStartEnd[hash].x;
+                        newV.x = CellStartEnd[hash].x;
                         newV.y = index + 1;
 
-                        cellStartEnd[hash] = newV; // set end
+                        CellStartEnd[hash] = newV; // set end
                     }
 
                     // Reorder atoms according to sorted indices
-                    sortedPos[index] = pos[id];
+                    SortedPositions[index] = Positions[id];
                 }
             }
         }
-
+        
         [BurstCompile(CompileSynchronously = true)]
         struct ClosestPointJob : IJobParallelFor
         {
-            [ReadOnly] public float3 oriGrid;
-            [ReadOnly] public float invresoGrid;
-            [ReadOnly] public int3 gridDim;
-            [ReadOnly] public NativeArray<float3> queryPos;
-            [ReadOnly] public NativeArray<int2> cellStartEnd;
-            [ReadOnly] public NativeArray<float3> sortedPos;
-            [ReadOnly] public NativeArray<int2> hashIndex;
-            [ReadOnly] public bool ignoreSelf;
-            [ReadOnly] public float squaredepsilonSelf;
+            [ReadOnly] public NativeArray<float3> GridOrigin;
+            [ReadOnly] public float GridResolutionInv;
+            [ReadOnly] public NativeArray<int3> GridDimensions;
+            [ReadOnly] public NativeArray<float3> QueryPositions;
+            [ReadOnly] public NativeArray<int2> CellStartEnd;
+            [ReadOnly] public NativeArray<float3> SortedPositions;
+            [ReadOnly] public NativeArray<int2> HashIndex;
+            [ReadOnly] public bool IgnoreSelf;
+            [ReadOnly] public float SquaredepsilonSelf;
 
-            public NativeArray<int> results;
+            public NativeArray<int> Results;
 
             void IJobParallelFor.Execute(int index)
             {
-                results[index] = -1;
-                float3 p = queryPos[index];
+                Results[index] = -1;
+                float3 p = QueryPositions[index];
 
-                int3 cell = spaceToGrid(p, oriGrid, invresoGrid);
-                cell = math.clamp(cell, new int3(0, 0, 0), gridDim - new int3(1, 1, 1));
+                float3 origin = GridOrigin[0];
+                int3 dimensions = GridDimensions[0];
+                int3 cell = SpaceToGrid(p, origin, GridResolutionInv);
+                cell = math.clamp(cell, int3.zero, dimensions - new int3(1, 1, 1));
 
                 float minD = float.MaxValue;
                 int3 curGridId;
@@ -571,36 +457,37 @@ namespace BurstGridSearch
                 for (int x = -1; x <= 1; x++)
                 {
                     curGridId.x = cell.x + x;
-                    if (curGridId.x >= 0 && curGridId.x < gridDim.x)
+                    if (curGridId.x >= 0 && curGridId.x < dimensions.x)
                     {
                         for (int y = -1; y <= 1; y++)
                         {
                             curGridId.y = cell.y + y;
-                            if (curGridId.y >= 0 && curGridId.y < gridDim.y)
+                            if (curGridId.y >= 0 && curGridId.y < dimensions.y)
                             {
                                 for (int z = -1; z <= 1; z++)
                                 {
                                     curGridId.z = cell.z + z;
-                                    if (curGridId.z >= 0 && curGridId.z < gridDim.z)
+                                    if (curGridId.z >= 0 && curGridId.z < dimensions.z)
                                     {
 
-                                        int neighcellhash = flatten3DTo1D(curGridId, gridDim);
-                                        int idStart = cellStartEnd[neighcellhash].x;
-                                        int idStop = cellStartEnd[neighcellhash].y;
+                                        int neighcellhash = Flatten3DTo1D(curGridId, dimensions);
+                                        
+                                        int idStart = CellStartEnd[neighcellhash].x;
+                                        int idStop = CellStartEnd[neighcellhash].y;
 
                                         if (idStart < int.MaxValue - 1)
                                         {
                                             for (int id = idStart; id < idStop; id++)
                                             {
 
-                                                float3 posA = sortedPos[id];
+                                                float3 posA = SortedPositions[id];
                                                 float d = math.distancesq(p, posA); //Squared distance
 
                                                 if (d < minD)
                                                 {
-                                                    if (ignoreSelf)
+                                                    if (IgnoreSelf)
                                                     {
-                                                        if (d > squaredepsilonSelf)
+                                                        if (d > SquaredepsilonSelf)
                                                         {
                                                             minRes = id;
                                                             minD = d;
@@ -623,22 +510,25 @@ namespace BurstGridSearch
 
                 if (minRes != -1)
                 {
-                    results[index] = hashIndex[minRes].y;
+                    Results[index] = HashIndex[minRes].y;
                 }
                 else
-                {//Neighbor cells do not contain anything => compute all distances
-                 //Compute all the distances ! = SLOW
-                    for (int id = 0; id < sortedPos.Length; id++)
+                {
+                    //Neighbor cells do not contain anything => compute all distances
+                    //Compute all the distances = SLOW
+                    // TODO: Improve this by progressively looping over outter layers or a growing cube
+                    // TODO: This can also be done in another IJobParallel
+                    for (int id = 0; id < SortedPositions.Length; id++)
                     {
 
-                        float3 posA = sortedPos[id];
-                        float d = math.distancesq(p, posA); //Squared distance
+                        float3 posA = SortedPositions[id];
+                        float d = math.distancesq(p, posA);
 
                         if (d < minD)
                         {
-                            if (ignoreSelf)
+                            if (IgnoreSelf)
                             {
-                                if (d > squaredepsilonSelf)
+                                if (d > SquaredepsilonSelf)
                                 {
                                     minRes = id;
                                     minD = d;
@@ -651,62 +541,59 @@ namespace BurstGridSearch
                             }
                         }
                     }
-                    results[index] = hashIndex[minRes].y;
+                    Results[index] = HashIndex[minRes].y;
                 }
             }
         }
 
-
-
         [BurstCompile(CompileSynchronously = true)]
         struct FindWithinJob : IJobParallelFor
         {
-            [ReadOnly] public float squaredRadius;
-            [ReadOnly] public int maxNeighbor;
-            [ReadOnly] public int cellsToLoop;
-            [ReadOnly] public float3 oriGrid;
+            [ReadOnly] public float SquaredRadius;
+            [ReadOnly] public int MaxNeighbor;
+            [ReadOnly] public int CellsToLoop;
+            [ReadOnly] public NativeArray<float3> GridOrigin;
             [ReadOnly] public float invresoGrid;
-            [ReadOnly] public int3 gridDim;
-            [ReadOnly] public NativeArray<float3> queryPos;
-            [ReadOnly] public NativeArray<int2> cellStartEnd;
-            [ReadOnly] public NativeArray<float3> sortedPos;
-            [ReadOnly] public NativeArray<int2> hashIndex;
+            [ReadOnly] public NativeArray<int3> GridDimensions;
+            [ReadOnly] public NativeArray<float3> QueryPositions;
+            [ReadOnly] public NativeArray<int2> CellStartEnd;
+            [ReadOnly] public NativeArray<float3> SortedPositions;
+            [ReadOnly] public NativeArray<int2> HashIndex;
 
             [NativeDisableParallelForRestriction]
-            public NativeArray<int> results;
+            public NativeArray<int> Results;
 
             void IJobParallelFor.Execute(int index)
             {
-                for (int i = 0; i < maxNeighbor; i++)
-                    results[index * maxNeighbor + i] = -1;
+                for (int i = 0; i < MaxNeighbor; i++)
+                    Results[index * MaxNeighbor + i] = -1;
 
-                float3 p = queryPos[index];
+                float3 p = QueryPositions[index];
 
-                int3 cell = spaceToGrid(p, oriGrid, invresoGrid);
-                cell = math.clamp(cell, new int3(0, 0, 0), gridDim - new int3(1, 1, 1));
+                int3 cell = SpaceToGrid(p, GridOrigin[0], invresoGrid);
+                cell = math.clamp(cell, new int3(0, 0, 0), GridDimensions[0] - new int3(1, 1, 1));
 
                 int3 curGridId;
                 int idRes = 0;
 
                 //First search for the corresponding cell
-                int neighcellhashf = flatten3DTo1D(cell, gridDim);
-                int idStartf = cellStartEnd[neighcellhashf].x;
-                int idStopf = cellStartEnd[neighcellhashf].y;
-
+                int neighcellhashf = Flatten3DTo1D(cell, GridDimensions[0]);
+                int idStartf = CellStartEnd[neighcellhashf].x;
+                int idStopf = CellStartEnd[neighcellhashf].y;
 
                 if (idStartf < int.MaxValue - 1)
                 {
                     for (int id = idStartf; id < idStopf; id++)
                     {
 
-                        float3 posA = sortedPos[id];
+                        float3 posA = SortedPositions[id];
                         float d = math.distancesq(p, posA); //Squared distance
-                        if (d <= squaredRadius)
+                        if (d <= SquaredRadius)
                         {
-                            results[index * maxNeighbor + idRes] = hashIndex[id].y;
+                            Results[index * MaxNeighbor + idRes] = HashIndex[id].y;
                             idRes++;
                             //Found enough close points we can stop there
-                            if (idRes == maxNeighbor)
+                            if (idRes == MaxNeighbor)
                             {
                                 return;
                             }
@@ -714,43 +601,42 @@ namespace BurstGridSearch
                     }
                 }
 
-                for (int x = -cellsToLoop; x <= cellsToLoop; x++)
+                for (int x = -CellsToLoop; x <= CellsToLoop; x++)
                 {
                     curGridId.x = cell.x + x;
-                    if (curGridId.x >= 0 && curGridId.x < gridDim.x)
+                    if (curGridId.x >= 0 && curGridId.x < GridDimensions[0].x)
                     {
-                        for (int y = -cellsToLoop; y <= cellsToLoop; y++)
+                        for (int y = -CellsToLoop; y <= CellsToLoop; y++)
                         {
                             curGridId.y = cell.y + y;
-                            if (curGridId.y >= 0 && curGridId.y < gridDim.y)
+                            if (curGridId.y >= 0 && curGridId.y < GridDimensions[0].y)
                             {
-                                for (int z = -cellsToLoop; z <= cellsToLoop; z++)
+                                for (int z = -CellsToLoop; z <= CellsToLoop; z++)
                                 {
                                     curGridId.z = cell.z + z;
-                                    if (curGridId.z >= 0 && curGridId.z < gridDim.z)
+                                    if (curGridId.z >= 0 && curGridId.z < GridDimensions[0].z)
                                     {
                                         if (x == 0 && y == 0 && z == 0)
                                             continue;//Already done that
 
-
-                                        int neighcellhash = flatten3DTo1D(curGridId, gridDim);
-                                        int idStart = cellStartEnd[neighcellhash].x;
-                                        int idStop = cellStartEnd[neighcellhash].y;
+                                        int neighcellhash = Flatten3DTo1D(curGridId, GridDimensions[0]);
+                                        int idStart = CellStartEnd[neighcellhash].x;
+                                        int idStop = CellStartEnd[neighcellhash].y;
 
                                         if (idStart < int.MaxValue - 1)
                                         {
                                             for (int id = idStart; id < idStop; id++)
                                             {
 
-                                                float3 posA = sortedPos[id];
+                                                float3 posA = SortedPositions[id];
                                                 float d = math.distancesq(p, posA); //Squared distance
 
-                                                if (d <= squaredRadius)
+                                                if (d <= SquaredRadius)
                                                 {
-                                                    results[index * maxNeighbor + idRes] = hashIndex[id].y;
+                                                    Results[index * MaxNeighbor + idRes] = HashIndex[id].y;
                                                     idRes++;
                                                     //Found enough close points we can stop there
-                                                    if (idRes == maxNeighbor)
+                                                    if (idRes == MaxNeighbor)
                                                     {
                                                         return;
                                                     }
@@ -765,286 +651,39 @@ namespace BurstGridSearch
                 }
             }
         }
-
-        //--------- Fast sort stuff
+        
         [BurstCompile(CompileSynchronously = true)]
         private struct PopulateEntryJob : IJobParallelFor
         {
             [NativeDisableParallelForRestriction]
-            public NativeArray<SortEntry> entries;
-            [ReadOnly] public NativeArray<int2> hashIndex;
+            public NativeArray<SortEntry> Entries;
+            [ReadOnly] public NativeArray<int2> HashIndex;
 
             public void Execute(int index)
             {
-                this.entries[index] = new SortEntry(hashIndex[index]);
+                Entries[index] = new SortEntry(HashIndex[index]);
             }
         }
 
         [BurstCompile(CompileSynchronously = true)]
         private struct DePopulateEntryJob : IJobParallelFor
         {
-            [ReadOnly] public NativeArray<SortEntry> entries;
-            public NativeArray<int2> hashIndex;
+            [ReadOnly] public NativeArray<SortEntry> Entries;
+            public NativeArray<int2> HashIndex;
 
             public void Execute(int index)
             {
-                hashIndex[index] = entries[index].value;
+                HashIndex[index] = Entries[index].Value;
             }
         }
-
-        public struct int2Comparer : IComparer<int2>
-        {
-            public int Compare(int2 lhs, int2 rhs)
-            {
-                return lhs.x.CompareTo(rhs.x);
-            }
-        }
-
-        static int3 spaceToGrid(float3 pos3D, float3 originGrid, float invdx)
+        
+        static int3 SpaceToGrid(float3 pos3D, float3 originGrid, float invdx)
         {
             return (int3)((pos3D - originGrid) * invdx);
         }
-        static int flatten3DTo1D(int3 id3d, int3 gridDim)
+        static int Flatten3DTo1D(int3 id3d, int3 gridDim)
         {
             return (id3d.z * gridDim.x * gridDim.y) + (id3d.y * gridDim.x) + id3d.x;
-            // return (gridDim.y * gridDim.z * id3d.x) + (gridDim.z * id3d.y) + id3d.z;
-        }
-
-
-        public static class ConcreteJobs
-        {
-            static ConcreteJobs()
-            {
-                new MultithreadedSort.Merge<SortEntry>().Schedule();
-                new MultithreadedSort.QuicksortJob<SortEntry>().Schedule();
-            }
-        }
-
-        // This is the item to sort
-        public readonly struct SortEntry : IComparable<SortEntry>
-        {
-            public readonly int2 value;
-
-            public SortEntry(int2 value)
-            {
-                this.value = value;
-            }
-
-            public int CompareTo(SortEntry other)
-            {
-                return this.value.x.CompareTo(other.value.x);
-            }
-        }
-    }
-
-    public static class MultithreadedSort
-    {
-        // Use quicksort when sub-array length is less than or equal than this value
-        public const int QUICKSORT_THRESHOLD_LENGTH = 400;
-
-        public static JobHandle Sort<T>(NativeArray<T> array, JobHandle parentHandle)
-        where T : unmanaged, IComparable<T>
-        {
-            return MergeSort(array, new SortRange(0, array.Length - 1), parentHandle);
-        }
-
-        // public static JobHandle Sort<T>(NativeArray<T> array, JobHandle parentHandle)
-        // where T : unmanaged, IComparable<T> {
-        //     return NativeSortExtension.SortJob(array, parentHandle);
-        // }
-
-
-        private static JobHandle MergeSort<T>(NativeArray<T> array, SortRange range, JobHandle parentHandle) where T : unmanaged, IComparable<T>
-        {
-            if (range.Length <= QUICKSORT_THRESHOLD_LENGTH)
-            {
-                // Use quicksort
-                return new QuicksortJob<T>()
-                {
-                    array = array,
-                    left = range.left,
-                    right = range.right
-                }.Schedule(parentHandle);
-            }
-
-            int middle = range.Middle;
-
-            SortRange left = new SortRange(range.left, middle);
-            JobHandle leftHandle = MergeSort(array, left, parentHandle);
-
-            SortRange right = new SortRange(middle + 1, range.right);
-            JobHandle rightHandle = MergeSort(array, right, parentHandle);
-
-            JobHandle combined = JobHandle.CombineDependencies(leftHandle, rightHandle);
-
-            return new Merge<T>()
-            {
-                array = array,
-                first = left,
-                second = right
-            }.Schedule(combined);
-        }
-
-        public readonly struct SortRange
-        {
-            public readonly int left;
-            public readonly int right;
-
-            public SortRange(int left, int right)
-            {
-                this.left = left;
-                this.right = right;
-            }
-
-            public int Length
-            {
-                get
-                {
-                    return this.right - this.left + 1;
-                }
-            }
-
-            public int Middle
-            {
-                get
-                {
-                    return (this.left + this.right) >> 1; // divide 2
-                }
-            }
-
-            public int Max
-            {
-                get
-                {
-                    return this.right;
-                }
-            }
-        }
-
-        [BurstCompile(CompileSynchronously = true)]
-        public struct Merge<T> : IJob where T : unmanaged, IComparable<T>
-        {
-            [NativeDisableContainerSafetyRestriction]
-            public NativeArray<T> array;
-
-            public SortRange first;
-            public SortRange second;
-
-            public void Execute()
-            {
-                int firstIndex = this.first.left;
-                int secondIndex = this.second.left;
-                int resultIndex = this.first.left;
-
-                // Copy first
-                NativeArray<T> copy = new NativeArray<T>(this.second.right - this.first.left + 1, Allocator.Temp);
-                for (int i = this.first.left; i <= this.second.right; ++i)
-                {
-                    int copyIndex = i - this.first.left;
-                    copy[copyIndex] = this.array[i];
-                }
-
-                while (firstIndex <= this.first.Max || secondIndex <= this.second.Max)
-                {
-                    if (firstIndex <= this.first.Max && secondIndex <= this.second.Max)
-                    {
-                        // both subranges still have elements
-                        T firstValue = copy[firstIndex - this.first.left];
-                        T secondValue = copy[secondIndex - this.first.left];
-
-                        if (firstValue.CompareTo(secondValue) < 0)
-                        {
-                            // first value is lesser
-                            this.array[resultIndex] = firstValue;
-                            ++firstIndex;
-                            ++resultIndex;
-                        }
-                        else
-                        {
-                            this.array[resultIndex] = secondValue;
-                            ++secondIndex;
-                            ++resultIndex;
-                        }
-                    }
-                    else if (firstIndex <= this.first.Max)
-                    {
-                        // Only the first range has remaining elements
-                        T firstValue = copy[firstIndex - this.first.left];
-                        this.array[resultIndex] = firstValue;
-                        ++firstIndex;
-                        ++resultIndex;
-                    }
-                    else if (secondIndex <= this.second.Max)
-                    {
-                        // Only the second range has remaining elements
-                        T secondValue = copy[secondIndex - this.first.left];
-                        this.array[resultIndex] = secondValue;
-                        ++secondIndex;
-                        ++resultIndex;
-                    }
-                }
-
-                copy.Dispose();
-            }
-        }
-
-        [BurstCompile(CompileSynchronously = true)]
-        public struct QuicksortJob<T> : IJob where T : unmanaged, IComparable<T>
-        {
-            [NativeDisableContainerSafetyRestriction]
-            public NativeArray<T> array;
-
-            public int left;
-            public int right;
-
-            public void Execute()
-            {
-                Quicksort(this.left, this.right);
-            }
-
-            private void Quicksort(int left, int right)
-            {
-                int i = left;
-                int j = right;
-                T pivot = this.array[(left + right) / 2];
-
-                while (i <= j)
-                {
-                    // Lesser
-                    while (this.array[i].CompareTo(pivot) < 0)
-                    {
-                        ++i;
-                    }
-
-                    // Greater
-                    while (this.array[j].CompareTo(pivot) > 0)
-                    {
-                        --j;
-                    }
-
-                    if (i <= j)
-                    {
-                        // Swap
-                        T temp = this.array[i];
-                        this.array[i] = this.array[j];
-                        this.array[j] = temp;
-
-                        ++i;
-                        --j;
-                    }
-                }
-
-                // Recurse
-                if (left < j)
-                {
-                    Quicksort(left, j);
-                }
-
-                if (i < right)
-                {
-                    Quicksort(i, right);
-                }
-            }
         }
     }
 }

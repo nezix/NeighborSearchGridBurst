@@ -49,7 +49,7 @@ public class TestGridSearch : MonoBehaviour {
 
 			float start = Time.realtimeSinceStartup;
 
-			GridSearchBurst2 gsb = new GridSearchBurst2(-1.0f, 28);
+			GridSearchBurst gsb = new GridSearchBurst(-1.0f, 28);
 
 			var handle = gsb.InitializeGrid(pos);
 			handle.Complete();
