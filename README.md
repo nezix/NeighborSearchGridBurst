@@ -17,7 +17,7 @@ Example cases:
 - Points ranging from -100 to 100 in x, y and/or z: for a grid resolution of 5, the grid size will be 200 / 5 => (40 x 40 x 40)
 - Points ranging from 0 to 0.05, for a grid resolution of 0.00156, the grid size will be 0.05 / 0.00156 => (32 x 32 x 32)
 
-#### Tested on Unity 2019.4.21
+#### Tested on Unity 2022.3.61
 
 ## Examples
 
@@ -95,7 +95,7 @@ For neighbor searching, the grid cell of the query point is computed, first we s
 ## Installation
 Add the git url to the package manager: https://docs.unity3d.com/Manual/upm-ui-giturl.html
 
-[<img src="https://docs.unity3d.com/uploads/Main/PackageManagerUI-GitURLPackageButton.png">](https://docs.unity3d.com/Manual/upm-ui-giturl.html)
+[<img src="https://docs.unity3d.com/Packages/Installation/manual/images/PackageManagerUI-GitURLPackageButton.png">](https://docs.unity3d.com/Manual/upm-ui-giturl.html)
 
 ## Contribute
 
